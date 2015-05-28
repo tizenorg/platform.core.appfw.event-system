@@ -1,0 +1,11 @@
+[Unit]
+Description=Start the Event System Daemon
+After=dbus.service
+
+[Service]
+ExecStart=/usr/bin/esd
+Restart=always
+RestartSec=0
+
+[Install]
+WantedBy=default.target
