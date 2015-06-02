@@ -977,7 +977,7 @@ static int esd_pkgmgr_event_callback(int req_id, const char *pkg_type,
 	} else if (strcmp(key, "end") == 0 && strcmp(val, "ok") == 0) {
 		if (pkg_event->type == INSTALL || pkg_event->type == UPDATE) {
 			_D("install end (ok)");
-			ret = pkgmgrinfo_pkginfo_get_usr_pkginfo(pkgid, &handle, getuid());
+			ret = pkgmgrinfo_pkginfo_get_usr_pkginfo(pkgid, getuid(), &handle);
 			if (ret < 0) {
 				_E("failed to get pkginfo");
 				esd_pkgmgr_event_free(pkg_event);
