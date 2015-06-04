@@ -97,6 +97,7 @@ typedef struct esd_info {
 static esd_info_s s_info;
 
 
+static int __esd_add_appinfo_handler(const pkgmgrinfo_appinfo_h handle, void *data);
 static void __esd_event_handler(char *event_name, bundle *data, void *user_data);
 
 static int __get_sender_pid(GDBusConnection *conn, const char *sender_name)
@@ -138,42 +139,6 @@ out:
   return pid;
 }
 
-static bool __esd_is_service_app(const char *appid)
-{
-	int ret = 0;
-	bool is_svcapp = false;
-	pkgmgrinfo_app_component component_type;
-	pkgmgrinfo_appinfo_h handle;
-
-	ret = pkgmgrinfo_appinfo_get_usr_appinfo(appid, getuid(), &handle);
-	if (ret != PMINFO_R_OK)
-		return false;
-
-	ret = pkgmgrinfo_appinfo_get_component(handle, &component_type);
-	if (ret != PMINFO_R_OK) {
-		pkgmgrinfo_appinfo_destroy_appinfo(handle);
-		return false;
-	}
-
-	_D("component_type : %d %d", component_type, PMINFO_SVC_APP);
-
-	if (component_type == PMINFO_SVC_APP) {
-		is_svcapp = true;
-	}
-	pkgmgrinfo_appinfo_destroy_appinfo(handle);
-
-	return is_svcapp;
-}
-
-void __esd_free_noti(gpointer data)
-{
-	eventsystem_info_s *n = (eventsystem_info_s *)data;
-
-	FREE_AND_NULL(n->appid);
-	FREE_AND_NULL(n->event_name);
-	FREE_AND_NULL(n);
-}
-
 void __esd_free_app_list(gpointer data)
 {
 	char *n = (char *)data;
@@ -207,17 +172,6 @@ static void esd_launch_table_print_items(void)
 	while (g_hash_table_iter_next(&iter, &key, &value)) {
 		esd_print_interested_event(value, NULL);
 	}
-}
-
-static void __esd_print_event_list_of_app(gpointer data, gpointer user_data)
-{
-	eventsystem_info_s *esi = (eventsystem_info_s *)data;
-	_D("esi : appid(%s), eventid(%s)", esi->appid, esi->event_name);
-}
-
-static void esd_print_event_list_of_app(GList *list)
-{
-	g_list_foreach(list, __esd_print_event_list_of_app, NULL);
 }
 
 static int esd_find_compare_by_list_item(gconstpointer data, gconstpointer user_data)
@@ -387,17 +341,6 @@ static int __esd_add_launch_item(const char *event_name, const char *appid)
 	return ES_R_OK;
 }
 
-static void esd_add_launch_item(gpointer data, gpointer user_data)
-{
-	eventsystem_info_s *eis = (eventsystem_info_s *)data;
-	char *event_name = eis->event_name;
-	eventlaunch_item_param_s *eli_p = (eventlaunch_item_param_s *)user_data;
-
-	if (__esd_add_launch_item(event_name, eli_p->app_id) < 0) {
-		_E("failed to add item");
-	}
-}
-
 static void __esd_remove_app_list(gpointer data, gpointer user_data)
 {
 	esd_list_item_s *item = (esd_list_item_s *)data;
@@ -425,26 +368,6 @@ static int esd_remove_launch_item(gpointer data, const char *pkg_id)
 		}
 		return ES_R_REMOVE;
 	}
-
-	return ES_R_OK;
-}
-
-static int esd_launch_table_add_items(const char *app_id, GList *event_list)
-{
-	eventlaunch_item_param_s *eli_p = NULL;
-
-	eli_p = calloc(1, sizeof(eventlaunch_item_param_s));
-	if (eli_p == NULL) {
-		_E("memory alloc failed");
-		return ES_R_ENOMEM;
-	}
-
-	eli_p->app_id = (char *)app_id;
-
-	_D("app_id(%s)", eli_p->app_id);
-	g_list_foreach(event_list, esd_add_launch_item, eli_p);
-
-	FREE_AND_NULL(eli_p);
 
 	return ES_R_OK;
 }
@@ -851,37 +774,12 @@ static int __esd_before_loop(void)
 	event_launch_table = g_hash_table_new(g_str_hash, g_str_equal);
 
 	_I("get event launch list");
-	pkgmgrinfo_appinfo_get_usr_event_launch_list(&es_info, getuid());
-	if (es_info) {
-		tmp_es_info = g_list_first(es_info);
-
-		while (tmp_es_info != NULL) {
-			eventsystem_info_s *esi = (eventsystem_info_s *)tmp_es_info->data;
-			_I("appid(%s)-eventname(%s)", esi->appid, esi->event_name);
-
-			if (!__esd_is_service_app(esi->appid)) {
-				_E("not service app");
-			} else {
-				if (__esd_add_launch_item(esi->event_name, esi->appid) < 0) {
-					_E("failed to add item");
-					ret = ES_R_ERROR;
-					break;
-				}
-			}
-
-			tmp_es_info = g_list_next(tmp_es_info);
-		}
-
-		g_list_free_full(es_info, __esd_free_noti);
-		esd_launch_table_print_items();
-
-		if (ret < 0) {
-			return ret;
-		}
-	} else {
-		_D("event list is null");
+	ret = pkgmgrinfo_appinfo_get_usr_installed_list(__esd_add_appinfo_handler, getuid(), NULL);
+	if (ret < 0) {
+		_E("pkgmgrinfo_appinfo_get_usr_installed_list error");
+		return ES_R_ERROR;
 	}
-
+	esd_launch_table_print_items();
 	/* gdbus setup for method call */
 	GError *error = NULL;
 	guint owner_id = 0;
@@ -917,10 +815,24 @@ static void esd_pkgmgr_event_free(esd_pkgmgr_event *pkg_event)
 	}
 }
 
+#define OPERATION_LAUNCH_ON_EVENT "http://tizen.org/appcontrol/operation/launch_on_event"
+static int __esd_appcontrol_cb(const char *operation, const char *uri, const char *mime, void *data)
+{
+	char *appid = (char *)data;
+
+	if (!strcmp(operation, OPERATION_LAUNCH_ON_EVENT)) {
+		if (__esd_add_launch_item(uri, appid)) {
+			_E("failed to add item for %s", appid);
+		}
+	}
+
+	return 0;
+}
+
 static int __esd_add_appinfo_handler(const pkgmgrinfo_appinfo_h handle, void *data)
 {
 	char *appid = NULL;
-	GList *event_list = NULL;
+	pkgmgrinfo_app_component component_type;
 	int ret = 0;
 
 	ret = pkgmgrinfo_appinfo_get_appid(handle, &appid);
@@ -931,19 +843,21 @@ static int __esd_add_appinfo_handler(const pkgmgrinfo_appinfo_h handle, void *da
 
 	_D("appid(%s)", appid);
 
-	if (!__esd_is_service_app(appid)) {
+	ret = pkgmgrinfo_appinfo_get_component(handle, &componenet_type);
+	if (ret != PMINFO_R_OK) {
+		_E("failed to get component type");
+		return ES_R_ERROR;
+	}
+
+	if (component_type != PMINFO_SVC_APP) {
 		_E("not service app");
 		return ES_R_OK;
 	}
 
-	pkgmgrinfo_appinfo_get_usr_event_launch_list_by_appid(appid, &event_list, getuid());
-	if (event_list) {
-		esd_print_event_list_of_app(event_list);
-		esd_launch_table_add_items(appid, event_list);
-		esd_launch_table_print_items();
-		g_list_free_full(event_list, __esd_free_noti);
-	} else {
-		_D("event_list is NULL");
+	ret = pkgmgrinfo_appinfo_foreach_appcontrol(handle, __esd_appcontrol_cb, appid);
+	if (ret < 0) {
+		_E("failed to get appcontrol info");
+		return ES_R_ERROR;
 	}
 
 	return ES_R_OK;
