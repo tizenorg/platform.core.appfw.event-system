@@ -895,8 +895,8 @@ static int esd_pkgmgr_event_callback(uid_t target_uid, int req_id, const char *p
 				esd_pkgmgr_event_free(pkg_event);
 				return 0;
 			}
-			ret = pkgmgrinfo_appinfo_get_list(handle,
-				PMINFO_SVC_APP, __esd_add_appinfo_handler, NULL);
+			ret = pkgmgrinfo_appinfo_get_usr_list(handle,
+				PMINFO_SVC_APP, __esd_add_appinfo_handler, NULL, getuid());
 			if (ret < 0) {
 				_E("failed to get appinfo");
 				esd_pkgmgr_event_free(pkg_event);
