@@ -11,7 +11,9 @@
 #include <pkgmgr-info.h>
 #include <appsvc/appsvc.h>
 #include <eventsystem.h>
-#include <bundle.h>
+#include <bundle_internal.h>
+#include <fcntl.h>
+#include <vconf.h>
 
 #undef LOG_TAG
 #define LOG_TAG "ESD"
@@ -36,13 +38,26 @@
 	} \
 } while (0)
 
+#define ESD_BOOT_COMPLETED "/tmp/esd_ready"
+
 static GHashTable *event_launch_table; /* table of events for launch_on_event*/
 
+struct privilege_info {
+	const char *event_name;
+	const char *privilege_name;
+};
+
+static const struct privilege_info privilege_check_list[] = {
+	{SYS_EVENT_DISPLAY_STATE, "org.tizen.privilege.display"},
+	{SYS_EVENT_WIFI_STATE, "org.tizen.privilege.network.get"},
+	{SYS_EVENT_INCOMMING_MSG, "org.tizen.privilege.message.read"}
+};
+
+static int privilege_check_size = sizeof(privilege_check_list)/sizeof(struct privilege_info);
+
 #ifdef APPFW_EVENT_SYSTEM_EARLIER_FEATURE
-const char *earlier_event_list[] = {
+static const char *earlier_event_list[] = {
 	SYS_EVENT_ESD_STATUS,
-	SYS_EVENT_BATTERY_CHARGER_STATUS,
-	SYS_EVENT_USB_STATUS,
 	SYS_EVENT_LOW_MEMORY,
 	SYS_EVENT_BOOT_COMPLETED,
 	SYS_EVENT_SYSTEM_SHUTDOWN
@@ -55,7 +70,17 @@ typedef struct __earlier_table_item {
 	guint reg_id;
 	bundle *earlier_data; /* event-data from earlier occurrence */
 } earlier_item;
+
+static bool g_is_bootcompleted = false;
 #endif
+
+static GHashTable *trusted_busname_table; /* table of dbus bus-names for trusted user-event */
+
+typedef struct __trusted_busname_item {
+	char *app_id;
+	char *bus_name;
+	int pid;
+} trusted_item;
 
 typedef struct __eventlaunch_item_param {
 	char *app_id;
@@ -97,8 +122,8 @@ typedef struct esd_info {
 static esd_info_s s_info;
 
 
-static int __esd_add_appinfo_handler(const pkgmgrinfo_appinfo_h handle, void *data);
 static void __esd_event_handler(char *event_name, bundle *data, void *user_data);
+static int __esd_add_appinfo_handler(const pkgmgrinfo_appinfo_h handle, void *data);
 
 static int __get_sender_pid(GDBusConnection *conn, const char *sender_name)
 {
@@ -115,7 +140,7 @@ static int __get_sender_pid(GDBusConnection *conn, const char *sender_name)
 		goto out;
 	}
 
-	g_dbus_message_set_body(msg, g_variant_new ("(s)", sender_name));
+	g_dbus_message_set_body(msg, g_variant_new("(s)", sender_name));
 	reply = g_dbus_connection_send_message_with_reply_sync(conn, msg,
 		G_DBUS_SEND_MESSAGE_FLAGS_NONE, -1, NULL, NULL, &err);
 
@@ -136,7 +161,241 @@ out:
 	if (reply)
 		g_object_unref(reply);
 
-  return pid;
+	_D("sender_name(%s), pid(%d)", sender_name, pid);
+
+	return pid;
+}
+
+static int __esd_check_certificate_match(const char *app_id, const char *from_appid)
+{
+	pkgmgrinfo_cert_compare_result_type_e res;
+	int ret = 0;
+
+	_D("app_id(%s), from_appid(%s)", app_id, from_appid);
+
+	ret = pkgmgrinfo_pkginfo_compare_usr_app_cert_info(app_id, from_appid, getuid(), &res);
+	if (ret < 0) {
+		_E("failed to check certificate");
+		return ES_R_ERROR;
+	}
+
+	if (res != PMINFO_CERT_COMPARE_MATCH) {
+		_D("certificat not match (%s)", app_id);
+		return ES_R_EINVAL;
+	}
+
+	return ES_R_OK;
+}
+
+static bool __esd_check_application_validation(const char *appid)
+{
+	int ret = 0;
+	pkgmgrinfo_appinfo_h handle;
+
+	ret = pkgmgrinfo_appinfo_get_usr_appinfo(appid, getuid(), &handle);
+	if (ret != PMINFO_R_OK)
+		return false;
+
+	pkgmgrinfo_appinfo_destroy_appinfo(handle);
+
+	if (!aul_app_is_running(appid))
+		return false;
+
+	return true;
+}
+
+static void esd_trusted_busname_print_items(void)
+{
+	GHashTableIter iter;
+	gpointer key, value;
+
+	g_hash_table_iter_init(&iter, trusted_busname_table);
+
+	while (g_hash_table_iter_next(&iter, &key, &value)) {
+		trusted_item *item = (trusted_item *)value;
+		if (item) {
+			_D("appid(%s), pid(%d), busname(%s)", item->app_id, item->pid, item->bus_name);
+		}
+	}
+}
+
+static int esd_trusted_busname_add_item(const char *appid, const char *busname, int pid)
+{
+	char *app_id = NULL;
+	char *bus_name = NULL;
+	trusted_item *item = NULL;
+
+	app_id = strdup(appid);
+	if (app_id == NULL) {
+		_E("out of memory");
+		return ES_R_ENOMEM;
+	}
+
+	bus_name = strdup(busname);
+	if (bus_name == NULL) {
+		_E("out of memory");
+		FREE_AND_NULL(app_id);
+		return ES_R_ENOMEM;
+	}
+
+	item = (trusted_item *)g_hash_table_lookup(trusted_busname_table, app_id);
+
+	if (item && item->bus_name && strcmp(item->bus_name, bus_name) == 0) {
+		_D("already exist (%s, %s)", app_id, bus_name);
+		FREE_AND_NULL(app_id);
+		FREE_AND_NULL(bus_name);
+	} else {
+		trusted_item *new_item = calloc(1, sizeof(trusted_item));
+		if (new_item == NULL) {
+			_E("memory alloc failed");
+			FREE_AND_NULL(app_id);
+			FREE_AND_NULL(bus_name);
+			return ES_R_ENOMEM;
+		}
+		new_item->app_id = app_id;
+		new_item->bus_name = bus_name;
+		new_item->pid = pid;
+		g_hash_table_insert(trusted_busname_table, new_item->app_id, new_item);
+		_D("added busname(%s)", new_item->bus_name);
+	}
+
+	return ES_R_OK;
+}
+
+static int __esd_check_trusted_events(GDBusConnection *conn, const char *list_name)
+{
+	GVariant *result;
+	GError *error = NULL;
+	GVariantIter *iter;
+	gchar *str;
+	char *ptr;
+	char tmp_appid[256] = {0, };
+	int pid = 0;
+	int ret = 0;
+
+	result = g_dbus_connection_call_sync(conn,
+		"org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+		list_name, NULL, G_VARIANT_TYPE("(as)"), G_DBUS_CALL_FLAGS_NONE,
+		-1, NULL, &error);
+
+	if (result == NULL) {
+		_E("get (%s) error(%s)", list_name, error->message);
+		g_error_free(error);
+		return ES_R_ERROR;
+	}
+
+	g_variant_get(result, "(as)", &iter);
+	while (g_variant_iter_loop(iter, "s", &str)) {
+		if (!(ptr = strstr((const char *)str, "event.busname_session")))
+			continue;
+
+		_D("list(%s), name(%s)", list_name, str);
+		pid = __get_sender_pid(conn, (const char *)str);
+		if (pid <= 0) {
+			_E("failed to get pid");
+			continue;
+		}
+
+		_D("pid(%d)", pid);
+		memset(tmp_appid, 0, sizeof(tmp_appid));
+		ret = aul_app_get_appid_bypid(pid, tmp_appid, sizeof(tmp_appid));
+		if (ret != AUL_R_OK) {
+			_E("failed to get appid by pid(%d)", pid);
+			continue;
+		}
+
+		_D("appid(%s)", tmp_appid);
+		if (__esd_check_application_validation(tmp_appid)) {
+			_D("add to table");
+			ret = esd_trusted_busname_add_item(tmp_appid, (const char *)str, pid);
+			if (ret < 0) {
+				_E("failed to add item");
+			}
+		}
+	}
+	g_variant_iter_free(iter);
+	g_variant_unref(result);
+
+	return ES_R_OK;
+}
+
+static int __esd_check_privilege_name(const char *event_name, char **privilege_name)
+{
+	int i = 0;
+
+	*privilege_name = NULL;
+
+	for (i = 0; i < privilege_check_size; i++) {
+		if (strcmp(event_name, privilege_check_list[i].event_name) == 0) {
+			*privilege_name = (char *)privilege_check_list[i].privilege_name;
+			_D("[%d] privilege_name(%s)", i, *privilege_name);
+			break;
+		}
+	}
+
+	return ES_R_OK;
+}
+
+static bool __esd_check_valid_privilege(const char *appid, const char *privilege_name)
+{
+	int ret = 0;
+	int result = 0;
+	bool has_privilege = false;
+	char *pkg_id = NULL;
+	pkgmgrinfo_appinfo_h handle;
+
+	_D("check privilege, (%s,%s)", appid, privilege_name);
+
+	ret = pkgmgrinfo_appinfo_get_usr_appinfo(appid, getuid(), &handle);
+	if (ret != PMINFO_R_OK)
+		return false;
+
+	ret = pkgmgrinfo_appinfo_get_pkgname(handle, &pkg_id);
+	if (ret != PMINFO_R_OK) {
+		pkgmgrinfo_appinfo_destroy_appinfo(handle);
+		return false;
+	}
+
+	/*
+	 * ret = security_server_app_has_privilege(pkg_id, APP_TYPE_EFL,
+	 * privilege_name, &result);
+	 * TODO : replace security_server api to cynara api.
+	*/
+
+	result = 1;
+	if (ret < 0) {
+		_E("failed to check privilege, error(%d)", ret);
+	} else {
+		if (result == 1) {
+			_D("Valid privilege");
+			has_privilege = true;
+		} else {
+			_E("Invalid privilege");
+		}
+	}
+
+	pkgmgrinfo_appinfo_destroy_appinfo(handle);
+
+	return has_privilege;
+}
+
+static int __esd_check_app_privileged_event(const char *appid, const char *event_name)
+{
+	char *privilege_name = NULL;
+	int ret = 0;
+
+	_D("appid(%s), event_name(%s)", appid, event_name);
+
+	__esd_check_privilege_name(event_name, &privilege_name);
+
+	if (privilege_name && !__esd_check_valid_privilege(appid, privilege_name)) {
+		_E("app(%s) has NOT privilege(%s)", appid, privilege_name);
+		ret = 0;
+	} else {
+		ret = 1;
+	}
+
+	return ret;
 }
 
 void __esd_free_app_list(gpointer data)
@@ -188,41 +447,43 @@ static int __esd_get_pkgid_by_appid(const char *app_id, char **pkg_id)
 	pkgmgrinfo_appinfo_h handle = NULL;
 	char *temp_val = NULL;
 	int ret = 0;
+	int result = ES_R_OK;
 
 	*pkg_id = NULL;
 
 	ret = pkgmgrinfo_appinfo_get_usr_appinfo(app_id, getuid(), &handle);
 	if (ret < 0) {
 		_E("failed to get appinfo");
-		ret = ES_R_ERROR;
+		result = ES_R_ERROR;
 		goto out;
 	}
 
 	ret = pkgmgrinfo_appinfo_get_pkgname(handle, &temp_val);
 	if (ret == PMINFO_R_OK && temp_val) {
 		*pkg_id = strdup(temp_val);
+		if (*pkg_id == NULL) {
+			_E("out of memory");
+			result = ES_R_ENOMEM;
+		}
 		_D("pkg_id(%s)", *pkg_id);
 	} else {
 		_E("failed to get pkgname");
+		result = ES_R_ERROR;
+	}
+
+out:
+	if (handle) {
 		ret = pkgmgrinfo_appinfo_destroy_appinfo(handle);
 		if (ret != PMINFO_R_OK) {
 			_E("failed to destroy appinfo");
+			result = ES_R_ERROR;
 		}
-		ret = ES_R_ERROR;
-		goto out;
-	}
-	ret = pkgmgrinfo_appinfo_destroy_appinfo(handle);
-	if (ret != PMINFO_R_OK) {
-		_E("failed to destroy appinfo");
-		free(*pkg_id);
-		ret = ES_R_ERROR;
-		goto out;
 	}
 
-	ret = ES_R_OK;
+	if (result != ES_R_OK)
+		FREE_AND_NULL(*pkg_id);
 
-out:
-	return ret;
+	return result;
 }
 
 static int __esd_add_list_item(event_launch_item *el_item,
@@ -278,7 +539,7 @@ static int __esd_add_launch_item(const char *event_name, const char *appid)
 		item_of_list->pkg_id = pkg_id;
 
 		app_list = g_list_find_custom(el_item->app_list_evtlaunch,
-				item_of_list, (GCompareFunc)esd_find_compare_by_list_item);
+			item_of_list, (GCompareFunc)esd_find_compare_by_list_item);
 		free(item_of_list);
 		if (app_list == NULL) {
 			_D("add new item (list item only)");
@@ -328,7 +589,7 @@ static int __esd_add_launch_item(const char *event_name, const char *appid)
 		g_hash_table_insert(event_launch_table, eli->event_name, eli);
 
 		eventsystem_register_event(eli->event_name, &subscription_id,
-					(eventsystem_handler)__esd_event_handler, NULL);
+			(eventsystem_handler)__esd_event_handler, NULL);
 		if (subscription_id == 0) {
 			_E("signal subscription error, event_name(%s), app_id(%s)",
 				eli->event_name, app_id);
@@ -394,10 +655,20 @@ static void esd_event_launch_with_appid(gpointer data, gpointer user_data)
 	esd_list_item_s *item = (esd_list_item_s *)data;
 	char *app_id = item->app_id;
 	esd_event_param *eep = (esd_event_param *)user_data;
+	char *from_appid = (char *)eep->user_data;
 	static unsigned int req_id;
 	int pid;
+	int ret = 0;
 
 	_D("launch_on_event: app_id(%s), event_name(%s)", app_id, eep->event_name);
+
+	if (from_appid && from_appid[0] != '\0') {
+		ret = __esd_check_certificate_match(app_id, from_appid);
+		if (ret != ES_R_OK) {
+			_D("from_appid(%s), no same cert", from_appid);
+			return;
+		}
+	}
 
 	if (!aul_app_is_running(app_id)) {
 		char event_uri[1024] = {0, };
@@ -460,11 +731,22 @@ static void __esd_earlier_event_handler(char *event_name, bundle *data, void *us
 	earlier_item *item =
 		(earlier_item *)g_hash_table_lookup(earlier_event_table, event_name);
 
-	/* update earlier value */
-	if (item->earlier_data != NULL) {
-		bundle_free(item->earlier_data);
+	if (item) {
+		/* update earlier value */
+		if (item->earlier_data != NULL) {
+			bundle_free(item->earlier_data);
+		}
+		item->earlier_data = bundle_dup(data);
+
+		if (!g_is_bootcompleted) {
+			if (strcmp(event_name, SYS_EVENT_BOOT_COMPLETED) == 0) {
+				int handle = creat(ESD_BOOT_COMPLETED, 0640);
+				if (handle != -1)
+					close(handle);
+				g_is_bootcompleted = true;
+			}
+		}
 	}
-	item->earlier_data = bundle_dup(data);
 }
 #endif
 
@@ -472,12 +754,28 @@ static GDBusNodeInfo *introspection_data;
 static const gchar introspection_xml[] =
 "<node>"
 "	<interface name='tizen.system.event.app2esd'>"
-"		<method name='CheckUserCertValidation'>"
-"			<arg type='i' name='frompid' direction='in'/>"
+"		<method name='GetTrustedPeerList'>"
+"			<arg type='s' name='eventname' direction='in'/>"
+"			<arg type='i' name='ret' direction='out'/>"
+"			<arg type='as' name='dest_list' direction='out'/>"
+"		</method>"
+"		<method name='SetupTrustedPeer'>"
+"			<arg type='s' name='eventname' direction='in'/>"
+"			<arg type='s' name='destination' direction='in'/>"
+"			<arg type='i' name='ret' direction='out'/>"
+"		</method>"
+"		<method name='CheckPrivilegeValidation'>"
+"			<arg type='s' name='eventname' direction='in'/>"
 "			<arg type='i' name='ret' direction='out'/>"
 "		</method>"
 "		<method name='CheckUserSendValidation'>"
 "			<arg type='s' name='eventname' direction='in'/>"
+"			<arg type='i' name='ret' direction='out'/>"
+"		</method>"
+"		<method name='RequestTrustedEventLaunch'>"
+"			<arg type='s' name='eventname' direction='in'/>"
+"			<arg type='s' name='eventdata' direction='in'/>"
+"			<arg type='i' name='datalen' direction='in'/>"
 "			<arg type='i' name='ret' direction='out'/>"
 "		</method>"
 "		<method name='RequestEventLaunch'>"
@@ -512,25 +810,20 @@ static void handle_method_call(GDBusConnection *connection,
 	GVariant *param = NULL;
 	int result = 0;
 
-	if (g_strcmp0(method_name, "CheckUserCertValidation") == 0) {
+	if (g_strcmp0(method_name, "GetTrustedPeerList") == 0) {
+		GVariantBuilder *builder = NULL;
+		GHashTableIter iter;
+		gpointer key, value;
+		char *event_name = NULL;
 		char app_id[256] = {0, };
-		char from_appid[256] = {0, };
-		int from_pid = 0;
 		int sender_pid = 0;
 		int ret = 0;
+		char *_appid = NULL;
+		char *_busname = NULL;
 
-		g_variant_get(parameters, "(i)", &from_pid);
+		g_variant_get(parameters, "(s)", &event_name);
 
-		_D("from_pid(%d)", from_pid);
-
-		if (from_pid > 0) {
-			ret = aul_app_get_appid_bypid(from_pid, from_appid, sizeof(from_appid));
-			if (ret != AUL_R_OK) {
-				_E("failed to get appid by from_pid");
-				result = ES_R_ERROR;
-				goto out_1;
-			}
-		}
+		_D("event_name(%s)", event_name);
 
 		sender_pid = __get_sender_pid(connection, sender);
 
@@ -539,38 +832,122 @@ static void handle_method_call(GDBusConnection *connection,
 			if (ret != AUL_R_OK) {
 				_E("failed to get appid by sender_pid");
 				result = ES_R_ERROR;
-				goto out_1;
+				goto out_get_trust;
 			}
 		} else {
 			_E("failed to get sender_pid");
-			goto out_1;
-		}
-
-		pkgmgrinfo_cert_compare_result_type_e res;
-		ret = pkgmgrinfo_pkginfo_compare_usr_app_cert_info(app_id, from_appid,
-				getuid(), &res);
-		if (ret < 0) {
-			_E("CheckCertificate() Failed");
 			result = ES_R_ERROR;
-			goto out_1;
+			goto out_get_trust;
 		}
 
-		if (res != PMINFO_CERT_COMPARE_MATCH) {
-			_E("CheckCertificate() Failed : ERROR_CERTIFICATE_NOT_MATCH");
-			result = ES_R_EINVAL;
-			goto out_1;
+		builder = g_variant_builder_new(G_VARIANT_TYPE("as"));
+
+		g_hash_table_iter_init(&iter, trusted_busname_table);
+		while (g_hash_table_iter_next(&iter, &key, &value)) {
+			trusted_item *item = (trusted_item *)value;
+			_appid = item->app_id;
+			_busname = item->bus_name;
+
+			ret = __esd_check_certificate_match(_appid, app_id);
+			if (ret == ES_R_OK) {
+				g_variant_builder_add(builder, "s", _busname);
+			}
 		}
 
 		result = 1;
+out_get_trust:
+		param = g_variant_new("(ias)", result, builder);
+		_D("result(%d)", result);
+		g_dbus_method_invocation_return_value(invocation, param);
+		if (builder)
+			g_variant_builder_unref(builder);
+	} else if (g_strcmp0(method_name, "SetupTrustedPeer") == 0) {
+		char *event_name = NULL;
+		char *destination_name = NULL;
+		char app_id[256] = {0, };
+		int sender_pid = 0;
+		int ret = 0;
+
+		g_variant_get(parameters, "(ss)", &event_name, &destination_name);
+
+		_D("event_name(%s), destination_name(%s)", event_name, destination_name);
+
+		if (destination_name && destination_name[0] != '\0') {
+			sender_pid = __get_sender_pid(connection, sender);
+
+			if (sender_pid > 0) {
+				ret = aul_app_get_appid_bypid(sender_pid, app_id, sizeof(app_id));
+				if (ret != AUL_R_OK) {
+					_E("failed to get appid by sender_pid");
+					result = ES_R_ERROR;
+					goto out_trust;
+				}
+			} else {
+				_E("failed to get sender_pid");
+				result = ES_R_ERROR;
+				goto out_trust;
+			}
+
+			ret = esd_trusted_busname_add_item(app_id, destination_name, sender_pid);
+			if (ret < 0) {
+				_E("failed to add trusted busname item");
+				result = ES_R_ERROR;
+			} else
+				result = 1;
+		} else {
+			_E("invalid destination name");
+			result = ES_R_ERROR;
+		}
+
+out_trust:
 		param = g_variant_new("(i)", result);
-out_1:
-		_D("app_id(%s), from_appid(%s), result(%d)", app_id, from_appid, result);
+		_D("event_name(%s), result(%d)", event_name, result);
+		g_dbus_method_invocation_return_value(invocation, param);
+	} else if (g_strcmp0(method_name, "CheckPrivilegeValidation") == 0) {
+		char *event_name = NULL;
+		char *privilege_name = NULL;
+		char app_id[256] = {0, };
+		int sender_pid = 0;
+		int ret = 0;
+
+		g_variant_get(parameters, "(s)", &event_name);
+
+		__esd_check_privilege_name(event_name, &privilege_name);
+
+		_D("event_name(%s), privilege_name(%s)", event_name, privilege_name);
+
+		if (privilege_name) {
+			sender_pid = __get_sender_pid(connection, sender);
+
+			if (sender_pid > 0) {
+				ret = aul_app_get_appid_bypid(sender_pid, app_id, sizeof(app_id));
+				if (ret != AUL_R_OK) {
+					_E("failed to get appid by sender_pid");
+					result = ES_R_ERROR;
+					goto out_priv;
+				}
+			} else {
+				_E("failed to get sender_pid");
+				result = ES_R_ERROR;
+				goto out_priv;
+			}
+
+			if (__esd_check_valid_privilege(app_id, privilege_name)) {
+				result = 1;
+			} else {
+				result = ES_R_EINVAL;
+			}
+		} else {
+			result = 1;
+		}
+out_priv:
+		param = g_variant_new("(i)", result);
+		_D("event_name(%s), result(%d)", event_name, result);
 		g_dbus_method_invocation_return_value(invocation, param);
 	} else if (g_strcmp0(method_name, "CheckUserSendValidation") == 0) {
 		char *event_name = NULL;
 		char app_id[256] = {0, };
 		char valid_name[1024];
-		char *user_defined_name = NULL;
 		int sender_pid = 0;
 		int ret = 0;
 		int len = 0;
@@ -586,11 +963,12 @@ out_1:
 			if (ret != AUL_R_OK) {
 				_E("failed to get appid by sender_pid");
 				result = ES_R_ERROR;
-				goto out_2;
+				goto out_send;
 			}
 		} else {
 			_E("failed to get sender_pid");
-			goto out_2;
+			result = ES_R_ERROR;
+			goto out_send;
 		}
 
 		snprintf(valid_name, 1024, "%s%s.", USER_EVENT_NAME_PREFIX, app_id);
@@ -601,21 +979,19 @@ out_1:
 		if (strncmp(event_name, valid_name, len) != 0) {
 			_E("appid misamatch");
 			result = ES_R_EINVAL;
-			goto out_2;
+			goto out_send;
 		} else {
-			user_defined_name = strdup(&event_name[len]);
-			len = strlen(user_defined_name);
+			len = strlen(event_name) - len;
 			if (len < 1 || len > 127) {
 				_E("Invalid Length of user-defined name");
 				result = ES_R_EINVAL;
-				goto out_2;
+				goto out_send;
 			}
-			free(user_defined_name);
 		}
 
 		result = 1;
+out_send:
 		param = g_variant_new("(i)", result);
-out_2:
 		_D("event_name(%s), result(%d)", event_name, result);
 		g_dbus_method_invocation_return_value(invocation, param);
 	} else if (g_strcmp0(method_name, "RequestEventLaunch") == 0) {
@@ -631,8 +1007,46 @@ out_2:
 		bundle_free(b);
 
 		result = 1;
-		param = g_variant_new("(i)", result);
 
+		param = g_variant_new("(i)", result);
+		_D("event_name(%s), result(%d)", event_name, result);
+		g_dbus_method_invocation_return_value(invocation, param);
+	} else if (g_strcmp0(method_name, "RequestTrustedEventLaunch") == 0) {
+		char app_id[256] = {0, };
+		int sender_pid = 0;
+		int ret = 0;
+		char *event_name = NULL;
+		bundle_raw *raw = NULL;
+		bundle *b = NULL;
+		int len = 0;
+
+		g_variant_get(parameters, "(ssi)", &event_name, &raw, &len);
+
+		_D("requested trusted-event launch");
+
+		sender_pid = __get_sender_pid(connection, sender);
+
+		if (sender_pid > 0) {
+			ret = aul_app_get_appid_bypid(sender_pid, app_id, sizeof(app_id));
+			if (ret != AUL_R_OK) {
+				_E("failed to get appid by sender_pid");
+				result = ES_R_ERROR;
+				goto out_trust_launch;
+			}
+		} else {
+			_E("failed to get sender_pid");
+			result = ES_R_ERROR;
+			goto out_trust_launch;
+		}
+
+		_D("from_appid(%s)", app_id);
+		b = bundle_decode(raw, len);
+		__esd_event_handler(event_name, b, app_id);
+		bundle_free(b);
+
+		result = 1;
+out_trust_launch:
+		param = g_variant_new("(i)", result);
 		_D("event_name(%s), result(%d)", event_name, result);
 		g_dbus_method_invocation_return_value(invocation, param);
 	} else if (g_strcmp0(method_name, "RequestSendingEvent") == 0) {
@@ -712,7 +1126,7 @@ static void on_bus_acquired(GDBusConnection *connection,
 		NULL, NULL, &error);
 	if (reg_id == 0) {
 		_E("g_dbus_connection_register_object error(%s)", error->message);
-		g_error_free (error);
+		g_error_free(error);
 	}
 }
 
@@ -721,10 +1135,15 @@ static void on_name_acquired(GDBusConnection *connection,
 {
 	_D("on_name_acquired(%s)", name);
 
+	__esd_check_trusted_events(connection, "ListNames");
+	__esd_check_trusted_events(connection, "ListActivatableNames");
+
 	bundle *b = bundle_create();
 	bundle_add_str(b, EVT_KEY_ESD_STATUS, EVT_VAL_ESD_STARTED);
 	eventsystem_send_system_event(SYS_EVENT_ESD_STATUS, b);
 	bundle_free(b);
+
+	esd_trusted_busname_print_items();
 }
 
 static void on_name_lost(GDBusConnection *connection,
@@ -751,17 +1170,54 @@ static int __esd_before_loop(void)
 		_I("event_name(%s)", event_name);
 
 		earlier_item *item = calloc(1, sizeof(earlier_item));
+		if (item == NULL) {
+			_E("memery alloc failed");
+			return ES_R_ENOMEM;
+		}
 		item->event_name = strdup(event_name);
 		if (item->event_name == NULL) {
 			_E("out of memory");
-			return ES_R_ERROR;
+			free(item);
+			return ES_R_ENOMEM;
 		}
+
+		/* set initial data */
+		if (strcmp(event_name, SYS_EVENT_BOOT_COMPLETED) == 0) {
+			int fd = 0;
+			fd = open(ESD_BOOT_COMPLETED, O_RDONLY);
+			if (fd < 0) {
+				_D("open file error(%d)", fd);
+			} else {
+				item->earlier_data = bundle_create();
+				bundle_add_str(item->earlier_data, EVT_KEY_BOOT_COMPLETED,
+					EVT_VAL_BOOT_COMPLETED_TRUE);
+				close(fd);
+			}
+		} else if (strcmp(event_name, SYS_EVENT_LOW_MEMORY) == 0) {
+			int status;
+			ret = vconf_get_int(VCONFKEY_SYSMAN_LOW_MEMORY, &status);
+			if (ret != VCONF_OK) {
+				_E("failed to get low_memory status (%d)", ret);
+			} else {
+				item->earlier_data = bundle_create();
+				if (status == VCONFKEY_SYSMAN_LOW_MEMORY_SOFT_WARNING)
+					bundle_add_str(item->earlier_data, EVT_KEY_LOW_MEMORY,
+						EVT_VAL_MEMORY_SOFT_WARNING);
+				else if (status == VCONFKEY_SYSMAN_LOW_MEMORY_HARD_WARNING)
+					bundle_add_str(item->earlier_data, EVT_KEY_LOW_MEMORY,
+						EVT_VAL_MEMORY_HARD_WARNING);
+				else
+					bundle_add_str(item->earlier_data, EVT_KEY_LOW_MEMORY,
+						EVT_VAL_MEMORY_NORMAL);
+			}
+		}
+
 		g_hash_table_insert(earlier_event_table, event_name, item);
 
 		eventsystem_register_event(item->event_name, &subscription_id,
-					(eventsystem_handler)__esd_earlier_event_handler, NULL);
+			(eventsystem_handler)__esd_earlier_event_handler, NULL);
 		if (subscription_id == 0) {
-			_E("signal subscription error, event_name(%s)",	item->event_name);
+			_E("signal subscription error, event_name(%s)", item->event_name);
 			return ES_R_ERROR;
 		} else {
 			item->reg_id = subscription_id;
@@ -778,13 +1234,18 @@ static int __esd_before_loop(void)
 		return ES_R_ERROR;
 	}
 	esd_launch_table_print_items();
+
+	trusted_busname_table = g_hash_table_new(g_str_hash, g_str_equal);
+
 	/* gdbus setup for method call */
 	GError *error = NULL;
 	guint owner_id = 0;
+
+	error = NULL;
 	introspection_data = g_dbus_node_info_new_for_xml(introspection_xml, &error);
 	if (!introspection_data) {
 		_E("g_dbus_node_info_new_for_xml error(%s)", error->message);
-		g_error_free (error);
+		g_error_free(error);
 		return ES_R_ERROR;
 	}
 
@@ -813,14 +1274,34 @@ static void esd_pkgmgr_event_free(esd_pkgmgr_event *pkg_event)
 	}
 }
 
-#define OPERATION_LAUNCH_ON_EVENT "http://tizen.org/appcontrol/operation/launch_on_event"
-static int __esd_appcontrol_cb(const char *operation, const char *uri, const char *mime, void *data)
+static int __esd_appcontrol_cb(const char *operation,
+		const char *uri, const char *mime, void *data)
 {
 	char *appid = (char *)data;
+	char *event_name = NULL;
+	const char *prefix = "event://";
 
-	if (!strcmp(operation, OPERATION_LAUNCH_ON_EVENT)) {
-		if (__esd_add_launch_item(uri, appid)) {
-			_E("failed to add item for %s", appid);
+	_D("appid(%s), operation(%s), uri(%s), mime(%s)",
+		appid, operation, uri, mime);
+
+	if (!strcmp(operation, APPSVC_OPERATION_LAUNCH_ON_EVENT)) {
+		if (!strncmp(uri, prefix, strlen(prefix))) {
+			event_name = strdup(&uri[8]);
+			if (event_name) {
+				_D("appid(%s), event_name(%s)", appid, event_name);
+				if (!__esd_check_app_privileged_event(appid, event_name)) {
+					_E("failed to add item (no privilege)");
+				} else {
+					if (__esd_add_launch_item(event_name, appid)) {
+						_E("failed to add item");
+					}
+				}
+				FREE_AND_NULL(event_name);
+			} else {
+				_E("out of memory");
+			}
+		} else {
+			_E("Invalid uri(%s) for event_name", uri);
 		}
 	}
 
@@ -839,29 +1320,26 @@ static int __esd_add_appinfo_handler(const pkgmgrinfo_appinfo_h handle, void *da
 		return ES_R_ERROR;
 	}
 
-	_D("appid(%s)", appid);
-
 	ret = pkgmgrinfo_appinfo_get_component(handle, &component_type);
 	if (ret != PMINFO_R_OK) {
-		_E("failed to get component type");
+		_E("fail to get component type");
 		return ES_R_ERROR;
 	}
 
-	if (component_type != PMINFO_SVC_APP) {
-		_E("not service app");
-		return ES_R_OK;
-	}
-
-	ret = pkgmgrinfo_appinfo_foreach_appcontrol(handle, __esd_appcontrol_cb, appid);
-	if (ret < 0) {
-		_E("failed to get appcontrol info");
-		return ES_R_ERROR;
+	if (component_type == PMINFO_SVC_APP) {
+		ret = pkgmgrinfo_appinfo_foreach_appcontrol(handle,
+			(pkgmgrinfo_app_control_list_cb)__esd_appcontrol_cb, appid);
+		if (ret < 0) {
+			_E("failed to get appcontrol info");
+			return ES_R_ERROR;
+		}
+		esd_launch_table_print_items();
 	}
 
 	return ES_R_OK;
 }
 
-static int esd_pkgmgr_event_callback(uid_t target_uid, int req_id, const char *pkg_type,
+static int esd_pkgmgr_event_callback(uid_t uid, int req_id, const char *pkg_type,
 		const char *pkgid, const char *key, const char *val,
 		const void *pmsg, void *data)
 {
@@ -889,14 +1367,14 @@ static int esd_pkgmgr_event_callback(uid_t target_uid, int req_id, const char *p
 	} else if (strcmp(key, "end") == 0 && strcmp(val, "ok") == 0) {
 		if (pkg_event->type == INSTALL || pkg_event->type == UPDATE) {
 			_D("install end (ok)");
-			ret = pkgmgrinfo_pkginfo_get_usr_pkginfo(pkgid, getuid(), &handle);
+			ret = pkgmgrinfo_pkginfo_get_usr_pkginfo(pkgid, uid, &handle);
 			if (ret < 0) {
 				_E("failed to get pkginfo");
 				esd_pkgmgr_event_free(pkg_event);
 				return 0;
 			}
-			ret = pkgmgrinfo_appinfo_get_usr_list(handle,
-				PMINFO_SVC_APP, __esd_add_appinfo_handler, NULL, getuid());
+			ret = pkgmgrinfo_appinfo_get_list(handle,
+				PMINFO_ALL_APP, __esd_add_appinfo_handler, NULL);
 			if (ret < 0) {
 				_E("failed to get appinfo");
 				esd_pkgmgr_event_free(pkg_event);
@@ -926,13 +1404,45 @@ static int esd_pkgmgr_event_callback(uid_t target_uid, int req_id, const char *p
 	return 0;
 }
 
+static int __esd_app_dead_handler(int pid, void *data)
+{
+	GHashTableIter iter;
+	gpointer key, value;
+
+	_I("pid: %d", pid);
+
+	if (pid <= 0)
+		return 0;
+
+	g_hash_table_iter_init(&iter, trusted_busname_table);
+
+	while (g_hash_table_iter_next(&iter, &key, &value)) {
+		trusted_item *item = (trusted_item *)value;
+		if (item) {
+			if (pid == item->pid) {
+				_D("remove trusted busname item(%s, %s)", item->app_id, item->bus_name);
+				free(item->app_id);
+				free(item->bus_name);
+				free(item);
+				g_hash_table_iter_remove(&iter);
+			}
+		}
+	}
+
+	return 0;
+}
+
 static int __esd_init()
 {
 	int req_id = 0;
 	int ret = 0;
 
+#if (GLIB_MAJOR_VERSION <= 2 && GLIB_MINOR_VERSION < 36)
 	g_type_init();
+#endif
 	ecore_init();
+
+	aul_listen_app_dead_signal(__esd_app_dead_handler, NULL);
 
 	pkgmgr_client *client = pkgmgr_client_new(PC_LISTENING);
 	if (client == NULL) {
@@ -982,6 +1492,25 @@ static void esd_finalize(void)
 
 	_D("esd finalize");
 
+	if (trusted_busname_table) {
+		GHashTableIter iter;
+
+		g_hash_table_iter_init(&iter, trusted_busname_table);
+
+		while (g_hash_table_iter_next(&iter, &key, &value)) {
+			trusted_item *item = (trusted_item *)value;
+			if (item) {
+				free(item->app_id);
+				free(item->bus_name);
+				free(item);
+			} else {
+				_E("item is null");
+			}
+			g_hash_table_iter_remove(&iter);
+		}
+		g_hash_table_unref(trusted_busname_table);
+	}
+
 #ifdef APPFW_EVENT_SYSTEM_EARLIER_FEATURE
 	if (earlier_event_table) {
 		GHashTableIter iter;
@@ -996,7 +1525,7 @@ static void esd_finalize(void)
 				bundle_free(item->earlier_data);
 				free(item);
 			} else {
-				LOGE("item is NULL");
+				_E("item is NULL");
 			}
 			g_hash_table_iter_remove(&iter);
 		}
@@ -1019,7 +1548,7 @@ static void esd_finalize(void)
 				g_list_free(el_item->app_list_evtlaunch);
 				free(el_item);
 			} else {
-				LOGE("item is NULL");
+				_E("item is NULL");
 			}
 			g_hash_table_iter_remove(&iter);
 		}
@@ -1036,6 +1565,8 @@ static void esd_finalize(void)
 			_E("pkgmgr_client_free failed(%d)", ret);
 		}
 	}
+
+	_D("esd finalize end");
 }
 
 int main(int argc, char *argv[])

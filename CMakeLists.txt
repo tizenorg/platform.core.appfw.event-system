@@ -18,7 +18,7 @@ INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 ### Required packages
 INCLUDE(FindPkgConfig)
 
-pkg_check_modules(pkgs REQUIRED dlog bundle pkgmgr-info glib-2.0 gio-2.0 appsvc aul ecore)
+pkg_check_modules(pkgs REQUIRED dlog bundle pkgmgr-info glib-2.0 gio-2.0 appsvc aul ecore vconf)
 
 FOREACH(flag ${pkgs_CFLAGS})
 	SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag}")
