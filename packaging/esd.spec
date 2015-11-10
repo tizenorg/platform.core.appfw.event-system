@@ -2,7 +2,7 @@ Name:       esd
 Summary:    Event system daemon
 Version:    0.0.1
 Release:    1
-Group:      Application Framework/Daemons
+Group:      Application Framework/Service
 License:    Apache-2.0
 Source0:    %{name}-%{version}.tar.gz
 Source1:    esd.service
