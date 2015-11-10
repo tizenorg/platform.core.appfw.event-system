@@ -35,7 +35,10 @@ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS}")
 SET(CMAKE_EXE_LINKER_FLAGS "-Wl,--as-needed")
 
 ##build eventsystem daemon
-add_executable(esd src/esd_main.c)
+add_executable(esd
+	src/esd_main.c
+	src/esd_system_event.c
+)
 TARGET_LINK_LIBRARIES(esd eventsystem pkgmgr-client ${pkgs_LDFLAGS})
 SET_TARGET_PROPERTIES(esd PROPERTIES COMPILE_FLAGS ${CFLAGS} "-fPIE")
 SET_TARGET_PROPERTIES(esd PROPERTIES LINK_FLAGS "-pie")
