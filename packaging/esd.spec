@@ -18,6 +18,11 @@ BuildRequires:  pkgconfig(glib-2.0)
 BuildRequires:  pkgconfig(pkgmgr)
 BuildRequires:  pkgconfig(eventsystem)
 BuildRequires:  pkgconfig(vconf)
+BuildRequires:  pkgconfig(libtzplatform-config)
+BuildRequires:  pkgconfig(libsystemd-daemon)
+BuildRequires:  pkgconfig(cynara-client)
+BuildRequires:  pkgconfig(cynara-creds-gdbus)
+BuildRequires:  pkgconfig(cynara-session)
 
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
@@ -49,9 +54,9 @@ make %{?jobs:-j%jobs}
 rm -rf %{buildroot}
 %make_install
 
-mkdir -p %{buildroot}%{_unitdir_user}/default.target.wants
-install -m 0644 %SOURCE1 %{buildroot}%{_unitdir_user}/esd.service
-ln -sf ../esd.service %{buildroot}%{_unitdir_user}/default.target.wants/esd.service
+mkdir -p %{buildroot}%{_unitdir}/default.target.wants
+install -m 0644 %SOURCE1 %{buildroot}%{_unitdir}/esd.service
+ln -sf ../esd.service %{buildroot}%{_unitdir}/default.target.wants/esd.service
 mkdir -p %{buildroot}/usr/share/license
 cp LICENSE %{buildroot}/usr/share/license/%{name}
 
@@ -64,8 +69,8 @@ cp LICENSE %{buildroot}/usr/share/license/%{name}
 %config %{_sysconfdir}/dbus-1/system.d/eventsystem.conf
 %defattr(-,root,root,-)
 %{_bindir}/esd
-%{_unitdir_user}/esd.service
-%{_unitdir_user}/default.target.wants/esd.service
+%{_unitdir}/esd.service
+%{_unitdir}/default.target.wants/esd.service
 /usr/share/license/%{name}
 
 %files devel
