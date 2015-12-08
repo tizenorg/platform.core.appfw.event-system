@@ -1450,6 +1450,9 @@ static void check_privilege_valid_method_call(GDBusConnection *connection, const
 	}
 
 out:
+	g_free(client);
+	g_free(user);
+	g_free(session);
 	param = g_variant_new("(i)", result);
 	_D("event_name(%s), result(%d)", event_name, result);
 	g_dbus_method_invocation_return_value(invocation, param);
