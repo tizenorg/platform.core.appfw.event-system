@@ -1174,7 +1174,7 @@ static int __esd_get_appid_by_pid(int pid, uid_t uid, char *app_id, int buf_size
 		_E("invalid uid(%d)", uid);
 		retval = ES_R_ERROR;
 	} else {
-		ret = aul_app_get_pkgid_bypid_for_uid(pid, app_id, buf_size, (uid_t)uid);
+		ret = aul_app_get_appid_bypid_for_uid(pid, app_id, buf_size, (uid_t)uid);
 		if (ret != AUL_R_OK) {
 			_E("failed to get appid by pid");
 			retval = ES_R_ERROR;
