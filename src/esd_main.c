@@ -74,10 +74,10 @@ static bool g_is_bootcompleted = false;
 static GHashTable *trusted_busname_table; /* table of dbus bus-names for trusted user-event */
 
 typedef struct __trusted_busname_item {
-	uid_t uid;
 	char *app_id;
 	char *bus_name;
 	int pid;
+	uid_t uid;
 } trusted_item;
 
 typedef struct __eventlaunch_item_param {
@@ -85,17 +85,17 @@ typedef struct __eventlaunch_item_param {
 } eventlaunch_item_param_s;
 
 typedef struct esd_list_item {
-	uid_t uid;
 	char *pkg_id;
 	char *app_id;
+	uid_t uid;
 } esd_list_item_s;
 
 typedef struct  __event_launch_table_item {
-	uid_t uid;
 	char *event_name;
 	char *package_name; /* just for passing pointer to app-list removal func */
 	GList *app_list_evtlaunch; /* app-list for on-event-launch */
 	guint reg_id;
+	uid_t uid;
 } event_launch_item;
 
 enum __pkg_event_type {
@@ -258,7 +258,7 @@ static int __esd_check_certificate_match(uid_t uid, const char *app_id, uid_t fr
 	pkgmgrinfo_cert_compare_result_type_e res;
 	int ret = 0;
 
-	_D("uid(%d), app_id(%s), from_uid(%d), from_appid(%s)", uid, app_id, from_appid);
+	_D("uid(%d), app_id(%s), from_uid(%d), from_appid(%s)", uid, app_id, from_uid, from_appid);
 
 	if (uid != from_uid) {
 		/* TODO(jongmyeong.ko): check cert result if uids are not same */
@@ -1174,7 +1174,7 @@ static int __esd_get_appid_by_pid(int pid, uid_t uid, char *app_id, int buf_size
 		_E("invalid uid(%d)", uid);
 		retval = ES_R_ERROR;
 	} else {
-		ret = aul_app_get_pkgid_bypid_for_uid(pid, app_id, buf_size, (uid_t)uid);
+		ret = aul_app_get_appid_bypid_for_uid(pid, app_id, buf_size, (uid_t)uid);
 		if (ret != AUL_R_OK) {
 			_E("failed to get appid by pid");
 			retval = ES_R_ERROR;
@@ -1418,14 +1418,14 @@ static void check_privilege_valid_method_call(GDBusConnection *connection, const
 		if (__esd_get_appid_by_pid(sender_pid, sender_uid, app_id, sizeof(app_id)) < 0) {
 			result = ES_R_ERROR;
 		} else {
-			ret = cynara_creds_gdbus_get_client(connection, sender, CLIENT_METHOD_PID, &client);
+			ret = cynara_creds_gdbus_get_client(connection, sender, CLIENT_METHOD_DEFAULT, &client);
 			if (ret != CYNARA_API_SUCCESS) {
 				_E("failed to get client");
 				result = ES_R_EINVAL;
 				goto out;
 			}
 
-			ret = cynara_creds_gdbus_get_user(connection, sender, USER_METHOD_UID, &user);
+			ret = cynara_creds_gdbus_get_user(connection, sender, USER_METHOD_DEFAULT, &user);
 			if (ret != CYNARA_API_SUCCESS) {
 				_E("failed to get user");
 				result = ES_R_EINVAL;
@@ -1439,6 +1439,7 @@ static void check_privilege_valid_method_call(GDBusConnection *connection, const
 				goto out;
 			}
 
+			_D("app_id(%s), client(%s), session(%s), user(%s)", app_id, client, session, user);
 			if (__esd_check_valid_privilege_by_cynara(app_id, client, session, user, privilege_name)) {
 				result = 1;
 			} else {
