@@ -43,9 +43,8 @@ static int __esd_event_data_compare(bundle *b1, bundle *b2, const char *key)
 		ret = 1;
 	}
 
-	if (ret == 0) {
+	if (ret == 0)
 		_D("same event_data");
-	}
 
 	return ret;
 }
@@ -53,7 +52,6 @@ static int __esd_event_data_compare(bundle *b1, bundle *b2, const char *key)
 static int __esd_send_system_event(const char *event_name, bundle *b, const char *key)
 {
 	int ret = ES_R_OK;
-
 	esd_sent_item *item =
 		(esd_sent_item *)g_hash_table_lookup(esd_sent_table, event_name);
 
@@ -111,22 +109,19 @@ static void __esd_vconfcb_location_use_mylocation(keynode_t *node, void *user_da
 
 	key = EVT_KEY_LOCATION_ENABLE_STATE;
 
-	if (enabled) {
+	if (enabled)
 		val = EVT_VAL_LOCATION_ENABLED;
-	} else {
+	else
 		val = EVT_VAL_LOCATION_DISABLED;
-	}
 
 	b = bundle_create();
 	bundle_add_str(b, key, val);
 
-	if (__esd_send_system_event(SYS_EVENT_LOCATION_ENABLE_STATE, b, key) != ES_R_OK) {
+	if (__esd_send_system_event(SYS_EVENT_LOCATION_ENABLE_STATE, b, key) != ES_R_OK)
 		_E("failed to send event");
-	}
 
-	if (b) {
+	if (b)
 		bundle_free(b);
-	}
 }
 
 static void __esd_vconfcb_location_enabled(keynode_t *node, void *user_data)
@@ -147,22 +142,19 @@ static void __esd_vconfcb_location_enabled(keynode_t *node, void *user_data)
 
 	key = EVT_KEY_GPS_ENABLE_STATE;
 
-	if (enabled) {
+	if (enabled)
 		val = EVT_VAL_GPS_ENABLED;
-	} else {
+	else
 		val = EVT_VAL_GPS_DISABLED;
-	}
 
 	b = bundle_create();
 	bundle_add_str(b, key, val);
 
-	if (__esd_send_system_event(SYS_EVENT_GPS_ENABLE_STATE, b, key) != ES_R_OK) {
+	if (__esd_send_system_event(SYS_EVENT_GPS_ENABLE_STATE, b, key) != ES_R_OK)
 		_E("failed to send event");
-	}
 
-	if (b) {
+	if (b)
 		bundle_free(b);
-	}
 }
 
 static void __esd_vconfcb_location_network_enabled(keynode_t *node, void *user_data)
@@ -183,22 +175,19 @@ static void __esd_vconfcb_location_network_enabled(keynode_t *node, void *user_d
 
 	key = EVT_KEY_NPS_ENABLE_STATE;
 
-	if (enabled) {
+	if (enabled)
 		val = EVT_VAL_NPS_ENABLED;
-	} else {
+	else
 		val = EVT_VAL_NPS_DISABLED;
-	}
 
 	b = bundle_create();
 	bundle_add_str(b, key, val);
 
-	if (__esd_send_system_event(SYS_EVENT_NPS_ENABLE_STATE, b, key) != ES_R_OK) {
+	if (__esd_send_system_event(SYS_EVENT_NPS_ENABLE_STATE, b, key) != ES_R_OK)
 		_E("failed to send event");
-	}
 
-	if (b) {
+	if (b)
 		bundle_free(b);
-	}
 }
 
 static void __esd_vconfcb_language_set(keynode_t *node, void *user_data)
@@ -220,13 +209,11 @@ static void __esd_vconfcb_language_set(keynode_t *node, void *user_data)
 	b = bundle_create();
 	bundle_add_str(b, key, str);
 
-	if (__esd_send_system_event(SYS_EVENT_LANGUAGE_SET, b, key) != ES_R_OK) {
+	if (__esd_send_system_event(SYS_EVENT_LANGUAGE_SET, b, key) != ES_R_OK)
 		_E("failed to send event");
-	}
 
-	if (b) {
+	if (b)
 		bundle_free(b);
-	}
 }
 
 static void __esd_vconfcb_hour_format(keynode_t *node, void *user_data)
@@ -255,13 +242,11 @@ static void __esd_vconfcb_hour_format(keynode_t *node, void *user_data)
 	b = bundle_create();
 	bundle_add_str(b, key, val);
 
-	if (__esd_send_system_event(SYS_EVENT_HOUR_FORMAT, b, key) != ES_R_OK) {
+	if (__esd_send_system_event(SYS_EVENT_HOUR_FORMAT, b, key) != ES_R_OK)
 		_E("failed to send event");
-	}
 
-	if (b) {
+	if (b)
 		bundle_free(b);
-	}
 }
 
 static void __esd_vconfcb_region_format(keynode_t *node, void *user_data)
@@ -283,13 +268,11 @@ static void __esd_vconfcb_region_format(keynode_t *node, void *user_data)
 	b = bundle_create();
 	bundle_add_str(b, key, str);
 
-	if (__esd_send_system_event(SYS_EVENT_REGION_FORMAT, b, key) != ES_R_OK) {
+	if (__esd_send_system_event(SYS_EVENT_REGION_FORMAT, b, key) != ES_R_OK)
 		_E("failed to send event");
-	}
 
-	if (b) {
+	if (b)
 		bundle_free(b);
-	}
 }
 
 static void __esd_vconfcb_vibration_status(keynode_t *node, void *user_data)
@@ -320,46 +303,42 @@ static void __esd_vconfcb_vibration_status(keynode_t *node, void *user_data)
 		val = EVT_VAL_VIBRATION_ON;
 		b = bundle_create();
 		bundle_add_str(b, key, val);
-		if (__esd_send_system_event(SYS_EVENT_VIBRATION_STATE, b, key) != ES_R_OK) {
+		if (__esd_send_system_event(SYS_EVENT_VIBRATION_STATE, b, key) != ES_R_OK)
 			_E("failed to send event");
-		}
-		if (b) {
+
+		if (b)
 			bundle_free(b);
-		}
 
 		key = EVT_KEY_SILENT_MODE;
 		val = EVT_VAL_SILENTMODE_OFF;
 		b = bundle_create();
 		bundle_add_str(b, key, val);
-		if (__esd_send_system_event(SYS_EVENT_SILENT_MODE, b, key) != ES_R_OK) {
+		if (__esd_send_system_event(SYS_EVENT_SILENT_MODE, b, key) != ES_R_OK)
 			_E("failed to send event");
-		}
-		if (b) {
+
+		if (b)
 			bundle_free(b);
-		}
 	} else {
 		key = EVT_KEY_VIBRATION_STATE;
 		val = EVT_VAL_VIBRATION_OFF;
 		b = bundle_create();
 		bundle_add_str(b, key, val);
-		if (__esd_send_system_event(SYS_EVENT_VIBRATION_STATE, b, key) != ES_R_OK) {
+		if (__esd_send_system_event(SYS_EVENT_VIBRATION_STATE, b, key) != ES_R_OK)
 			_E("failed to send event");
-		}
-		if (b) {
+
+		if (b)
 			bundle_free(b);
-		}
 
 		if (!sound_on) {
 			key = EVT_KEY_SILENT_MODE;
 			val = EVT_VAL_SILENTMODE_ON;
 			b = bundle_create();
 			bundle_add_str(b, key, val);
-			if (__esd_send_system_event(SYS_EVENT_SILENT_MODE, b, key) != ES_R_OK) {
+			if (__esd_send_system_event(SYS_EVENT_SILENT_MODE, b, key) != ES_R_OK)
 				_E("failed to send event");
-			}
-			if (b) {
+
+			if (b)
 				bundle_free(b);
-			}
 		}
 	}
 }
@@ -392,35 +371,32 @@ static void __esd_vconfcb_sound_status(keynode_t *node, void *user_data)
 		val = EVT_VAL_VIBRATION_OFF;
 		b = bundle_create();
 		bundle_add_str(b, key, val);
-		if (__esd_send_system_event(SYS_EVENT_VIBRATION_STATE, b, key) != ES_R_OK) {
+		if (__esd_send_system_event(SYS_EVENT_VIBRATION_STATE, b, key) != ES_R_OK)
 			_E("failed to send event");
-		}
-		if (b) {
+
+		if (b)
 			bundle_free(b);
-		}
 
 		key = EVT_KEY_SILENT_MODE;
 		val = EVT_VAL_SILENTMODE_OFF;
 		b = bundle_create();
 		bundle_add_str(b, key, val);
-		if (__esd_send_system_event(SYS_EVENT_SILENT_MODE, b, key) != ES_R_OK) {
+		if (__esd_send_system_event(SYS_EVENT_SILENT_MODE, b, key) != ES_R_OK)
 			_E("failed to send event");
-		}
-		if (b) {
+
+		if (b)
 			bundle_free(b);
-		}
 	} else {
 		if (!vibration_on) {
 			key = EVT_KEY_SILENT_MODE;
 			val = EVT_VAL_SILENTMODE_ON;
 			b = bundle_create();
 			bundle_add_str(b, key, val);
-			if (__esd_send_system_event(SYS_EVENT_SILENT_MODE, b, key) != ES_R_OK) {
+			if (__esd_send_system_event(SYS_EVENT_SILENT_MODE, b, key) != ES_R_OK)
 				_E("failed to send event");
-			}
-			if (b) {
+
+			if (b)
 				bundle_free(b);
-			}
 		}
 	}
 }
@@ -451,13 +427,11 @@ static void __esd_vconfcb_auto_rotate(keynode_t *node, void *user_data)
 	b = bundle_create();
 	bundle_add_str(b, key, val);
 
-	if (__esd_send_system_event(SYS_EVENT_SCREEN_AUTOROTATE_STATE, b, key) != ES_R_OK) {
+	if (__esd_send_system_event(SYS_EVENT_SCREEN_AUTOROTATE_STATE, b, key) != ES_R_OK)
 		_E("failed to send event");
-	}
 
-	if (b) {
+	if (b)
 		bundle_free(b);
-	}
 }
 
 static void __esd_vconfcb_mobiledata_state(keynode_t *node, void *user_data)
@@ -486,13 +460,11 @@ static void __esd_vconfcb_mobiledata_state(keynode_t *node, void *user_data)
 	b = bundle_create();
 	bundle_add_str(b, key, val);
 
-	if (__esd_send_system_event(SYS_EVENT_MOBILE_DATA_STATE, b, key) != ES_R_OK) {
+	if (__esd_send_system_event(SYS_EVENT_MOBILE_DATA_STATE, b, key) != ES_R_OK)
 		_E("failed to send event");
-	}
 
-	if (b) {
+	if (b)
 		bundle_free(b);
-	}
 }
 
 static void __esd_vconfcb_roaming_state(keynode_t *node, void *user_data)
@@ -521,13 +493,11 @@ static void __esd_vconfcb_roaming_state(keynode_t *node, void *user_data)
 	b = bundle_create();
 	bundle_add_str(b, key, val);
 
-	if (__esd_send_system_event(SYS_EVENT_DATA_ROAMING_STATE, b, key) != ES_R_OK) {
+	if (__esd_send_system_event(SYS_EVENT_DATA_ROAMING_STATE, b, key) != ES_R_OK)
 		_E("failed to send event");
-	}
 
-	if (b) {
+	if (b)
 		bundle_free(b);
-	}
 }
 
 static void __esd_vconfcb_font_set(keynode_t *node, void *user_data)
@@ -549,13 +519,11 @@ static void __esd_vconfcb_font_set(keynode_t *node, void *user_data)
 	b = bundle_create();
 	bundle_add_str(b, key, str);
 
-	if (__esd_send_system_event(SYS_EVENT_FONT_SET, b, key) != ES_R_OK) {
+	if (__esd_send_system_event(SYS_EVENT_FONT_SET, b, key) != ES_R_OK)
 		_E("failed to send event");
-	}
 
-	if (b) {
+	if (b)
 		bundle_free(b);
-	}
 }
 
 static struct esd_vconf_handler vconf_callbacks[] = {
@@ -600,4 +568,3 @@ int __esd_register_vconf_callbacks(void)
 
 	return result;
 }
-
