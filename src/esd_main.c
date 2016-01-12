@@ -1588,7 +1588,7 @@ static int __esd_before_loop(void)
 	int status;
 	int charger_status;
 	int charge_now;
-	ealier_item *item;
+	earlier_item *item;
 
 	earlier_event_table = g_hash_table_new(g_str_hash, g_str_equal);
 
