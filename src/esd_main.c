@@ -6,7 +6,6 @@
 #include <dlog.h>
 #include <Ecore.h>
 #include <gio/gio.h>
-#include <assert.h>
 #include <package-manager.h>
 #include <pkgmgr-info.h>
 #include <appsvc/appsvc.h>
@@ -2077,14 +2076,12 @@ int main(int argc, char *argv[])
 
 	if (__esd_init() != 0) {
 		_E("ESD Initialization failed!");
-		assert(0);
 		return ES_R_ERROR;
 	}
 
 	if (__esd_before_loop() < 0) {
 		_E("ESD failed!");
 		__esd_finalize();
-		assert(0);
 		return ES_R_ERROR;
 	}
 
