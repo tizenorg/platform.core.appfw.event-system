@@ -23,6 +23,7 @@ BuildRequires:  pkgconfig(libsystemd-daemon)
 BuildRequires:  pkgconfig(cynara-client)
 BuildRequires:  pkgconfig(cynara-creds-gdbus)
 BuildRequires:  pkgconfig(cynara-session)
+BuildRequires:  pkgconfig(security-manager)
 
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig

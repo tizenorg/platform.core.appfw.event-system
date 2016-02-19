@@ -18,6 +18,7 @@
 #include <cynara-client.h>
 #include <cynara-creds-gdbus.h>
 #include <cynara-session.h>
+#include <security-manager.h>
 #include "eventsystem_daemon.h"
 
 #define GLOBAL_USER tzplatform_getuid(TZ_SYS_GLOBALAPP_USER)
@@ -256,12 +257,7 @@ static int __esd_check_certificate_match(uid_t uid, const char *app_id, uid_t fr
 
 	_D("uid(%d), app_id(%s), from_uid(%d), from_appid(%s)", uid, app_id, from_uid, from_appid);
 
-	if (uid != from_uid) {
-		/* TODO(jongmyeong.ko): check cert result if uids are not same */
-		_D("not same uid");
-	}
-
-	ret = pkgmgrinfo_pkginfo_compare_usr_app_cert_info(app_id, from_appid, uid, &res);
+	ret = pkgmgrinfo_pkginfo_compare_usr_app_cert_info(app_id, from_appid, from_uid, &res);
 	if (ret < 0) {
 		_E("failed to check certificate");
 		return ES_R_ERROR;
@@ -286,11 +282,8 @@ static bool __esd_check_application_validation(uid_t uid, const char *appid)
 
 	pkgmgrinfo_appinfo_destroy_appinfo(handle);
 
-	/* FIXME(jongmyeong.ko) */
-	/*
-	if (!aul_app_is_running(appid))
+	if (!aul_app_is_running_for_uid(appid, uid))
 		return false;
-	*/
 
 	return true;
 }
@@ -476,23 +469,21 @@ static int __esd_check_app_privileged_event(uid_t uid, const char *appid, const 
 	char *privilege_name = NULL;
 	char client[256] = {0, };
 	char *user = NULL;
-	int retval = 1;
+	int ret = 0;
+	int result = 0;
 
 	_D("event_name(%s), uid(%d), appid(%s), pkgid(%s)", event_name, uid, appid, pkgid);
 
 	__esd_check_privilege_name(event_name, &privilege_name);
 
 	if (privilege_name) {
-		/* TODO(jongmyeong.ko): getting client should be replaced by cynara api */
-		snprintf(client, 256, "User::App::%s", pkgid);
-		user = (char *)g_strdup_printf("%u", uid);
-		if (!__esd_check_valid_privilege_by_cynara(appid, client, "", user, privilege_name)) {
-			_E("app(%s) has NOT privilege(%s)", appid, privilege_name);
-			retval = 0;
-		}
+		ret = security_manager_app_has_privilege(appid, privilege_name, uid, &result);
+		if (ret != SECURITY_MANAGER_SUCCESS)
+			_E("failed to check privilege(%d)", ret);
+		_D("result(%d)", result);
 	}
 
-	return retval;
+	return result;
 }
 
 static void __esd_print_appid_with_eventid(gpointer data, gpointer user_data)
@@ -754,28 +745,10 @@ static void __esd_event_launch_with_appid(gpointer data, gpointer user_data)
 	int pid;
 	char event_uri[1024];
 	bundle *b;
-	/* char *from_appid = (char *)eep->user_data; */
-	/* uid_t from_uid = 0; */
-	/* int ret = 0; */
 
 	_D("launch_on_event: app_id(%s), event_name(%s)", app_id, eep->event_name);
 
-	/* TODO(jongmyeong.ko): for launch by user-event */
-	/*
-	if (from_appid && from_appid[0] != '\0') {
-		ret = __esd_check_certificate_match(uid, app_id, from_uid, from_appid);
-		if (ret != ES_R_OK) {
-			_D("from_appid(%s), no same cert", from_appid);
-			return;
-		}
-	}
-	*/
-
-	/* FIXME(jongmyeong.ko): aul_app_is_running */
-	/*
-	if (!aul_app_is_running(app_id)) {
-	*/
-	if (1) {
+	if (aul_app_is_running_for_uid(app_id, uid)) {
 		snprintf(event_uri, sizeof(event_uri), "event://%s", eep->event_name);
 		b = bundle_dup(eep->event_data);
 		appsvc_set_operation(b, APPSVC_OPERATION_LAUNCH_ON_EVENT);
