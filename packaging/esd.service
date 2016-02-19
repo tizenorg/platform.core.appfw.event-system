@@ -3,6 +3,8 @@ Description=Start the Event System Daemon
 After=dbus.service
 
 [Service]
+User=app_fw
+Group=app_fw
 ExecStart=/usr/bin/esd
 Restart=always
 RestartSec=0
