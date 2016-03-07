@@ -25,11 +25,6 @@
 extern "C" {
 #endif
 
-
-#ifdef __cplusplus
-}
-#endif
-
 #undef LOG_TAG
 #define LOG_TAG "ESD"
 
@@ -38,9 +33,20 @@ extern "C" {
 #define _W(fmt, arg...) LOGW(fmt, ##arg)
 #define _I(fmt, arg...) LOGI(fmt, ##arg)
 
+#define FREE_AND_NULL(ptr) do { \
+	if (ptr) { \
+		free((void *)ptr); \
+		ptr = NULL; \
+	} \
+} while (0)
+
 #define ESD_BOOT_COMPLETED "/tmp/esd_ready"
 
 int __esd_register_vconf_callbacks(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __EVENTSYSTEM_DAEMONE_H__ */
 
