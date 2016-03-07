@@ -932,7 +932,7 @@ static void __esd_filter_name_owner_changed(GDBusConnection *connection,
 	int old_len = 0;
 	int new_len = 0;
 
-	g_variant_get(parameters, "(sss)", &name, &old_owner, &new_owner);
+	g_variant_get(parameters, "(&s&s&s)", &name, &old_owner, &new_owner);
 
 	if (strstr(name, "event.busname.session")) {
 		old_len = strlen(old_owner);
@@ -970,6 +970,7 @@ static int __esd_get_user_items(void)
 	int i = 0;
 	uid_t *uids = NULL;
 	uid_t cur_uid = 0;
+	pkgmgrinfo_appinfo_filter_h handle = NULL;
 
 	ret = sd_get_uids(&uids);
 	if (ret < 0) {
@@ -986,9 +987,30 @@ static int __esd_get_user_items(void)
 			cur_uid = uids[i];
 			_I("found uid(%d)", cur_uid);
 
-			ret = pkgmgrinfo_appinfo_get_usr_installed_list(__esd_add_appinfo_handler, cur_uid, &cur_uid);
-			if (ret < 0)
-				_E("failed to get user(%d)-app list (%d)", cur_uid, ret);
+			ret = pkgmgrinfo_appinfo_filter_create(&handle);
+			if (ret < 0) {
+				_E("failed to create appinfo filter");
+				return ES_R_ERROR;
+			}
+			ret = pkgmgrinfo_appinfo_filter_add_string(handle,
+					PMINFO_APPINFO_PROP_APP_COMPONENT, "svcapp");
+			if (ret < 0) {
+				_E("failed to add appinfo filter string");
+				return ES_R_ERROR;
+			}
+			ret = pkgmgrinfo_appinfo_filter_add_string(handle,
+					PMINFO_APPINFO_PROP_APP_OPERATION, APPSVC_OPERATION_LAUNCH_ON_EVENT);
+			if (ret < 0) {
+				_E("failed to add appinfo filter string");
+				return ES_R_ERROR;
+			}
+			ret = pkgmgrinfo_appinfo_usr_filter_foreach_appinfo(handle,
+					__esd_add_appinfo_handler, &cur_uid, cur_uid);
+			if (ret < 0) {
+				_E("appinfo filter foreach error");
+				return ES_R_ERROR;
+			}
+			pkgmgrinfo_appinfo_filter_destroy(handle);
 		}
 	}
 
@@ -1199,7 +1221,7 @@ static void check_sender_valid_method_call(GDBusConnection *connection, const gc
 	int event_sender_pid = 0;
 	uid_t sender_uid = 0;
 
-	g_variant_get(parameters, "(is)", &event_sender_pid, &event_name);
+	g_variant_get(parameters, "(i&s)", &event_sender_pid, &event_name);
 	_D("event_sender_pid(%d), event_name(%s)", event_sender_pid, event_name);
 
 	sender_uid = (uid_t)__get_sender_uid(connection, sender);
@@ -1229,7 +1251,7 @@ static void check_send_event_valid_method_call(GDBusConnection *connection, cons
 	int sender_pid = 0;
 	uid_t sender_uid = 0;
 
-	g_variant_get(parameters, "(s)", &event_name);
+	g_variant_get(parameters, "(&s)", &event_name);
 	_D("event_name(%s)", event_name);
 
 	sender_pid = __get_sender_pid(connection, sender);
@@ -1268,7 +1290,7 @@ static void get_trusted_peer_method_call(GDBusConnection *connection, const gcha
 	char *_busname = NULL;
 	trusted_item *item;
 
-	g_variant_get(parameters, "(s)", &event_name);
+	g_variant_get(parameters, "(&s)", &event_name);
 	_D("event_name(%s)", event_name);
 
 	sender_pid = __get_sender_pid(connection, sender);
@@ -1315,7 +1337,7 @@ static void setup_trusted_peer_method_call(GDBusConnection *connection, const gc
 	uid_t sender_uid = 0;
 	int ret = 0;
 
-	g_variant_get(parameters, "(ss)", &event_name, &destination_name);
+	g_variant_get(parameters, "(&s&s)", &event_name, &destination_name);
 	_D("event_name(%s), destination_name(%s)", event_name, destination_name);
 
 	if (destination_name && destination_name[0] != '\0') {
@@ -1358,7 +1380,7 @@ static void check_privilege_valid_method_call(GDBusConnection *connection, const
 	char *user = NULL;
 	int ret = 0;
 
-	g_variant_get(parameters, "(s)", &event_name);
+	g_variant_get(parameters, "(&s)", &event_name);
 	__esd_check_privilege_name(event_name, &privilege_name);
 	_D("event_name(%s), privilege_name(%s)", event_name, privilege_name);
 
@@ -1419,7 +1441,7 @@ static void get_earlier_data_method_call(GVariant *parameters, GDBusMethodInvoca
 	int len = 0;
 	earlier_item *item;
 
-	g_variant_get(parameters, "(s)", &event_name);
+	g_variant_get(parameters, "(&s)", &event_name);
 
 	if (event_name && strlen(event_name) > 0) {
 		_D("event_name(%s)", event_name);
@@ -1529,7 +1551,6 @@ static void __esd_on_name_lost(GDBusConnection *connection,
 static int __esd_before_loop(void)
 {
 	int ret = 0;
-	uid_t uid = 0;
 	GError *error = NULL;
 	guint owner_id = 0;
 
@@ -1659,16 +1680,6 @@ static int __esd_before_loop(void)
 
 	_I("get event launch list");
 
-	/* get global user info */
-	uid = GLOBAL_USER;
-	ret = pkgmgrinfo_appinfo_get_usr_installed_list(__esd_add_appinfo_handler, uid, &uid);
-	if (ret < 0) {
-		_E("failed to get global-app list (%d)", ret);
-		return ES_R_ERROR;
-	}
-
-	__esd_launch_table_print_items();
-
 	trusted_busname_table = g_hash_table_new(g_str_hash, g_str_equal);
 
 	/* gdbus setup for method call */
@@ -1756,7 +1767,6 @@ static int __esd_add_appinfo_handler(const pkgmgrinfo_appinfo_h handle, void *da
 {
 	char *appid = NULL;
 	char *pkgid = NULL;
-	pkgmgrinfo_app_component component_type;
 	int ret = 0;
 	uid_t *p_uid = NULL;
 
@@ -1767,65 +1777,57 @@ static int __esd_add_appinfo_handler(const pkgmgrinfo_appinfo_h handle, void *da
 
 	p_uid = (uid_t *)data;
 
+	ret = pkgmgrinfo_appinfo_get_pkgid(handle, &pkgid);
+	if (ret < 0) {
+		_E("failed to get appid");
+		return ES_R_ERROR;
+	}
+
 	ret = pkgmgrinfo_appinfo_get_appid(handle, &appid);
 	if (ret < 0) {
 		_E("failed to get appid");
 		return ES_R_ERROR;
 	}
 
-	ret = pkgmgrinfo_appinfo_get_pkgid(handle, &pkgid);
-	if (ret < 0) {
-		_E("failed to get pkgid");
-		return ES_R_ERROR;
+	esd_appctrl_cb_data *cb_data = calloc(1, sizeof(esd_appctrl_cb_data));
+
+	if (cb_data == NULL) {
+		_E("memory alloc failed");
+		return ES_R_ENOMEM;
 	}
-
-	ret = pkgmgrinfo_appinfo_get_component(handle, &component_type);
-	if (ret != PMINFO_R_OK) {
-		_E("fail to get component type");
-		return ES_R_ERROR;
+	cb_data->appid = strdup(appid);
+	if (cb_data->appid == NULL) {
+		_E("out_of_memory");
+		FREE_AND_NULL(cb_data);
+		return ES_R_ENOMEM;
 	}
-
-	_D("uid(%d), appid(%s), component_type(%d)", *p_uid, appid, component_type);
-	if (component_type == PMINFO_SVC_APP) {
-		esd_appctrl_cb_data *cb_data = calloc(1, sizeof(esd_appctrl_cb_data));
-		if (cb_data == NULL) {
-			_E("memory alloc failed");
-			return ES_R_ENOMEM;
-		}
-		cb_data->appid = strdup(appid);
-		if (cb_data->appid == NULL) {
-			_E("out_of_memory");
-			FREE_AND_NULL(cb_data);
-			return ES_R_ENOMEM;
-		}
-		cb_data->pkgid = strdup(pkgid);
-		if (cb_data->pkgid == NULL) {
-			_E("out_of_memory");
-			FREE_AND_NULL(cb_data->appid);
-			FREE_AND_NULL(cb_data);
-			return ES_R_ENOMEM;
-		}
-		cb_data->uid = *p_uid;
-		ret = pkgmgrinfo_appinfo_foreach_appcontrol(handle,
-			(pkgmgrinfo_app_control_list_cb)__esd_appcontrol_cb, cb_data);
-
-		FREE_AND_NULL(cb_data->pkgid);
+	cb_data->pkgid = strdup(pkgid);
+	if (cb_data->pkgid == NULL) {
+		_E("out_of_memory");
 		FREE_AND_NULL(cb_data->appid);
 		FREE_AND_NULL(cb_data);
+		return ES_R_ENOMEM;
+	}
+	cb_data->uid = *p_uid;
 
-		if (ret < 0) {
-			_E("failed to get appcontrol info");
-			return ES_R_ERROR;
-		}
-		__esd_launch_table_print_items();
+	ret = pkgmgrinfo_appinfo_foreach_appcontrol(handle,
+		(pkgmgrinfo_app_control_list_cb)__esd_appcontrol_cb, cb_data);
+
+	FREE_AND_NULL(cb_data->pkgid);
+	FREE_AND_NULL(cb_data->appid);
+	FREE_AND_NULL(cb_data);
+
+	if (ret < 0) {
+		_E("failed to get appcontrol info");
+		return ES_R_ERROR;
 	}
 
 	return ES_R_OK;
 }
 
-static int __esd_pkgmgr_event_callback(uid_t target_uid, int req_id, const char *pkg_type,
-		const char *pkgid, const char *key, const char *val,
-		const void *pmsg, void *data)
+static int __esd_pkgmgr_event_callback(uid_t target_uid, int req_id,
+		const char *pkg_type, const char *pkgid, const char *key,
+		const char *val, const void *pmsg, void *data)
 {
 	esd_pkgmgr_event *pkg_event = (esd_pkgmgr_event *)data;
 	pkgmgrinfo_pkginfo_h handle = NULL;
