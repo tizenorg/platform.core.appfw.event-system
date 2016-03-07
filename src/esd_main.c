@@ -178,13 +178,14 @@ static int __esd_check_event_launch_support(const char *event_name)
 	return false;
 }
 
-static uid_t __get_sender_unixinfo(GDBusConnection *conn, const char *sender_name, const char *type)
+static int __get_sender_unixinfo(GDBusConnection *conn, const char *sender_name, const char *type)
 {
 	GDBusMessage *msg = NULL;
 	GDBusMessage *reply = NULL;
 	GError *err = NULL;
 	GVariant *body;
-	int value = -1;
+	int ret = -1;
+	unsigned int value;
 
 	msg = g_dbus_message_new_method_call("org.freedesktop.DBus", "/org/freedesktop/DBus",
 		"org.freedesktop.DBus", type);
@@ -207,6 +208,7 @@ static uid_t __get_sender_unixinfo(GDBusConnection *conn, const char *sender_nam
 
 	body = g_dbus_message_get_body(reply);
 	g_variant_get(body, "(u)", &value);
+	ret = (int)value;
 
 out:
 	if (msg)
@@ -214,7 +216,7 @@ out:
 	if (reply)
 		g_object_unref(reply);
 
-	return (uid_t)value;
+	return ret;
 }
 
 static int __get_sender_pid(GDBusConnection *conn, const char *sender_name)
@@ -232,13 +234,14 @@ static int __get_sender_pid(GDBusConnection *conn, const char *sender_name)
 	return pid;
 }
 
-static uid_t __get_sender_uid(GDBusConnection *conn, const char *sender_name)
+static int __get_sender_uid(GDBusConnection *conn, const char *sender_name)
 {
-	uid_t uid = -1;
+	int uid = -1;
 
 	uid = __get_sender_unixinfo(conn, sender_name, "GetConnectionUnixUser");
-	if (uid < 0)
+	if (uid < 0) {
 		_E("failed to get uid");
+	}
 
 	_D("sender_name(%s), uid(%d)", sender_name, uid);
 
@@ -352,7 +355,7 @@ static int __esd_check_trusted_events(GDBusConnection *conn, const char *list_na
 	gchar *str;
 	char tmp_appid[128] = {0, };
 	int pid = 0;
-	uid_t uid = 0;
+	int uid = 0;
 	int ret = 0;
 
 	result = g_dbus_connection_call_sync(conn,
@@ -386,16 +389,16 @@ static int __esd_check_trusted_events(GDBusConnection *conn, const char *list_na
 		_D("uid(%d)", uid);
 
 		memset(tmp_appid, 0, sizeof(tmp_appid));
-		ret = aul_app_get_appid_bypid_for_uid(pid, tmp_appid, sizeof(tmp_appid), uid);
+		ret = aul_app_get_appid_bypid_for_uid(pid, tmp_appid, sizeof(tmp_appid), (uid_t)uid);
 		if (ret != AUL_R_OK) {
 			_E("failed to get appid by pid(%d)", pid);
 			continue;
 		}
 
 		_D("appid(%s)", tmp_appid);
-		if (__esd_check_application_validation(uid, tmp_appid)) {
+		if (__esd_check_application_validation((uid_t)uid, tmp_appid)) {
 			_D("add to table");
-			ret = __esd_trusted_busname_add_item(uid, tmp_appid, (const char *)str, pid);
+			ret = __esd_trusted_busname_add_item((uid_t)uid, tmp_appid, (const char *)str, pid);
 			if (ret < 0)
 				_E("failed to add item");
 		}
@@ -1199,7 +1202,7 @@ static void check_sender_valid_method_call(GDBusConnection *connection, const gc
 	g_variant_get(parameters, "(is)", &event_sender_pid, &event_name);
 	_D("event_sender_pid(%d), event_name(%s)", event_sender_pid, event_name);
 
-	sender_uid = __get_sender_uid(connection, sender);
+	sender_uid = (uid_t)__get_sender_uid(connection, sender);
 	if (__esd_get_appid_by_pid(event_sender_pid, sender_uid, app_id, sizeof(app_id)) < 0) {
 		result = ES_R_ERROR;
 	} else {
@@ -1230,7 +1233,7 @@ static void check_send_event_valid_method_call(GDBusConnection *connection, cons
 	_D("event_name(%s)", event_name);
 
 	sender_pid = __get_sender_pid(connection, sender);
-	sender_uid = __get_sender_uid(connection, sender);
+	sender_uid = (uid_t)__get_sender_uid(connection, sender);
 	if (__esd_get_appid_by_pid(sender_pid, sender_uid, app_id, sizeof(app_id)) < 0) {
 		result = ES_R_ERROR;
 	} else {
@@ -1269,7 +1272,7 @@ static void get_trusted_peer_method_call(GDBusConnection *connection, const gcha
 	_D("event_name(%s)", event_name);
 
 	sender_pid = __get_sender_pid(connection, sender);
-	sender_uid = __get_sender_uid(connection, sender);
+	sender_uid = (uid_t)__get_sender_uid(connection, sender);
 	if (__esd_get_appid_by_pid(sender_pid, sender_uid, app_id, sizeof(app_id)) < 0) {
 		result = ES_R_ERROR;
 	} else {
@@ -1317,7 +1320,7 @@ static void setup_trusted_peer_method_call(GDBusConnection *connection, const gc
 
 	if (destination_name && destination_name[0] != '\0') {
 		sender_pid = __get_sender_pid(connection, sender);
-		sender_uid = __get_sender_uid(connection, sender);
+		sender_uid = (uid_t)__get_sender_uid(connection, sender);
 		if (__esd_get_appid_by_pid(sender_pid, sender_uid, app_id, sizeof(app_id)) < 0) {
 			result = ES_R_ERROR;
 		} else {
@@ -1361,7 +1364,7 @@ static void check_privilege_valid_method_call(GDBusConnection *connection, const
 
 	if (privilege_name) {
 		sender_pid = __get_sender_pid(connection, sender);
-		sender_uid = __get_sender_uid(connection, sender);
+		sender_uid = (uid_t)__get_sender_uid(connection, sender);
 		if (__esd_get_appid_by_pid(sender_pid, sender_uid, app_id, sizeof(app_id)) < 0) {
 			result = ES_R_ERROR;
 		} else {
