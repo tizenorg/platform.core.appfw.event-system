@@ -729,9 +729,10 @@ static void __esd_event_launch_with_appid(gpointer data, gpointer user_data)
 	char event_uri[1024];
 	bundle *b;
 
-	_D("launch_on_event: app_id(%s), event_name(%s)", app_id, eep->event_name);
+	_D("launch_on_event: app_id(%s), event_name(%s), uid(%d)",
+			app_id, eep->event_name, uid);
 
-	if (aul_app_is_running_for_uid(app_id, uid)) {
+	if (!aul_app_is_running_for_uid(app_id, uid)) {
 		snprintf(event_uri, sizeof(event_uri), "event://%s", eep->event_name);
 		b = bundle_dup(eep->event_data);
 		appsvc_set_operation(b, APPSVC_OPERATION_LAUNCH_ON_EVENT);
@@ -743,7 +744,7 @@ static void __esd_event_launch_with_appid(gpointer data, gpointer user_data)
 
 		bundle_free(b);
 	} else {
-		_D("already is running");
+		_D("already is running or launch failed");
 	}
 }
 
@@ -1656,19 +1657,6 @@ static int __esd_before_loop(void)
 #endif
 
 	event_launch_table = g_hash_table_new(g_str_hash, g_str_equal);
-
-	_I("get event launch list");
-
-	/* get global user info */
-	uid = GLOBAL_USER;
-	ret = pkgmgrinfo_appinfo_get_usr_installed_list(__esd_add_appinfo_handler, uid, &uid);
-	if (ret < 0) {
-		_E("failed to get global-app list (%d)", ret);
-		return ES_R_ERROR;
-	}
-
-	__esd_launch_table_print_items();
-
 	trusted_busname_table = g_hash_table_new(g_str_hash, g_str_equal);
 
 	/* gdbus setup for method call */
