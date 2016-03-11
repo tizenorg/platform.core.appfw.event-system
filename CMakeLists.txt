@@ -28,7 +28,7 @@ ENDFOREACH(flag)
 
 ## Additional flag
 SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -fvisibility=hidden")
-SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -g -Wall")
+SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -g -Wall -Werror")
 SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS}")
 
 ## Linker flags
