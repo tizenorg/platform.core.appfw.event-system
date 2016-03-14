@@ -779,17 +779,17 @@ static void __esd_launch_event_handler(char *event_name, bundle *data, void *use
 		if (strcmp(SYS_EVENT_BATTERY_CHARGER_STATUS, event_name) == 0) {
 			val = bundle_get_val(data, EVT_KEY_BATTERY_CHARGER_STATUS);
 			_D("charger val(%s)", val);
-			if (strcmp(EVT_VAL_BATTERY_CHARGER_CONNECTED, val) != 0)
+			if (val && (strcmp(EVT_VAL_BATTERY_CHARGER_CONNECTED, val) != 0))
 				return;
 		} else if (strcmp(SYS_EVENT_USB_STATUS, event_name) == 0) {
 			val = bundle_get_val(data, EVT_KEY_USB_STATUS);
 			_D("usb val(%s)", val);
-			if (strcmp(EVT_VAL_USB_CONNECTED, val) != 0)
+			if (val && (strcmp(EVT_VAL_USB_CONNECTED, val) != 0))
 				return;
 		} else if (strcmp(SYS_EVENT_EARJACK_STATUS, event_name) == 0) {
 			val = bundle_get_val(data, EVT_KEY_EARJACK_STATUS);
 			_D("earjack val(%s)", val);
-			if (strcmp(EVT_VAL_EARJACK_CONNECTED, val) != 0)
+			if (val && (strcmp(EVT_VAL_EARJACK_CONNECTED, val) != 0))
 				return;
 		} else if (strcmp(SYS_EVENT_INCOMMING_MSG, event_name) == 0) {
 			msg_type = bundle_get_val(data, EVT_KEY_MSG_TYPE);
