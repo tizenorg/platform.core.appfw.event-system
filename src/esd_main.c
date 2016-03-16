@@ -30,7 +30,8 @@ static const char *event_launch_support_list[] = {
 	SYS_EVENT_BATTERY_CHARGER_STATUS,
 	SYS_EVENT_USB_STATUS,
 	SYS_EVENT_EARJACK_STATUS,
-	SYS_EVENT_INCOMMING_MSG
+	SYS_EVENT_INCOMMING_MSG,
+	SYS_EVENT_OUTGOING_MSG
 };
 
 struct privilege_info {
@@ -41,7 +42,8 @@ struct privilege_info {
 static const struct privilege_info privilege_check_list[] = {
 	{SYS_EVENT_DISPLAY_STATE, "http://tizen.org/privilege/display"},
 	{SYS_EVENT_WIFI_STATE, "http://tizen.org/privilege/network.get"},
-	{SYS_EVENT_INCOMMING_MSG, "http://tizen.org/privilege/message.read"}
+	{SYS_EVENT_INCOMMING_MSG, "http://tizen.org/privilege/message.read"},
+	{SYS_EVENT_OUTGOING_MSG, "http://tizen.org/privilege/message.read"}
 };
 
 static int privilege_check_size = sizeof(privilege_check_list)/sizeof(struct privilege_info);
