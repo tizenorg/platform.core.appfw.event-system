@@ -55,9 +55,9 @@ make %{?jobs:-j%jobs}
 rm -rf %{buildroot}
 %make_install
 
-mkdir -p %{buildroot}%{_unitdir}/default.target.wants
+mkdir -p %{buildroot}%{_unitdir}/graphical.target.wants
 install -m 0644 %SOURCE1 %{buildroot}%{_unitdir}/esd.service
-ln -sf ../esd.service %{buildroot}%{_unitdir}/default.target.wants/esd.service
+ln -sf ../esd.service %{buildroot}%{_unitdir}/graphical.target.wants/esd.service
 mkdir -p %{buildroot}/usr/share/license
 cp LICENSE %{buildroot}/usr/share/license/%{name}
 
@@ -71,7 +71,7 @@ cp LICENSE %{buildroot}/usr/share/license/%{name}
 %defattr(-,root,root,-)
 %{_bindir}/esd
 %{_unitdir}/esd.service
-%{_unitdir}/default.target.wants/esd.service
+%{_unitdir}/graphical.target.wants/esd.service
 /usr/share/license/%{name}
 
 %files devel
