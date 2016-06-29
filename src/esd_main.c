@@ -68,6 +68,13 @@ typedef struct __earlier_table_item {
 static bool g_is_bootcompleted = false;
 #endif
 
+static GHashTable *user_last_event_table; /* table of user events for earlier_data */
+
+struct __last_event_item {
+	char *event_name;
+	char *own_name;
+};
+
 static GHashTable *trusted_busname_table; /* table of dbus bus-names for trusted user-event */
 
 typedef struct __trusted_busname_item {
@@ -150,6 +157,16 @@ static void __esd_finish_cynara(void)
 	if (r_cynara)
 		cynara_finish(r_cynara);
 	r_cynara = NULL;
+}
+
+static void free_saved_event(struct __last_event_item *item)
+{
+	if (!item)
+		return;
+
+	free(item->event_name);
+	free(item->own_name);
+	free(item);
 }
 
 #ifdef APPFW_EVENT_SYSTEM_EARLIER_FEATURE
@@ -1136,6 +1153,16 @@ static const gchar introspection_xml[] =
 "			<arg type='s' name='earlier_data' direction='out'/>"
 "		</method>"
 #endif
+"		<method name='KeepLastData'>"
+"			<arg type='s' name='eventname' direction='in'/>"
+"			<arg type='s' name='own_name' direction='in'/>"
+"			<arg type='i' name='ret' direction='out'/>"
+"		</method>"
+"		<method name='CheckLastData'>"
+"			<arg type='s' name='eventname' direction='in'/>"
+"			<arg type='s' name='own_name' direction='in'/>"
+"			<arg type='i' name='ret' direction='out'/>"
+"		</method>"
 "	</interface>"
 "</node>";
 
@@ -1473,6 +1500,108 @@ static void get_earlier_data_method_call(GVariant *parameters, GDBusMethodInvoca
 }
 #endif
 
+static void keep_last_data_method_call(GVariant *parameters, GDBusMethodInvocation *invocation)
+{
+	GVariant *param;
+	int result = ES_R_OK;
+	char *event_name;
+	char *own_name;
+	struct __last_event_item *item;
+
+	g_variant_get(parameters, "(&s&s)", &event_name, &own_name);
+
+	if (!event_name || !own_name) {
+		result = ES_R_ERROR;
+		_E("invalid event_name and own_name");
+		goto out;
+	}
+
+	item = (struct __last_event_item *)g_hash_table_lookup(user_last_event_table,
+			event_name);
+	if (!item) {
+		item = calloc(1, sizeof(*item));
+		if (!item) {
+			result = ES_R_ERROR;
+			goto out;
+		}
+		item->event_name = strdup(event_name);
+		item->own_name = strdup(own_name);
+		g_hash_table_insert(user_last_event_table,
+				item->event_name, item);
+	} else {
+		free(item->own_name);
+		item->own_name = strdup(own_name);
+	}
+
+out:
+	param = g_variant_new("(i)", result);
+
+	g_dbus_method_invocation_return_value(invocation, param);
+}
+
+static void check_last_data_method_call(GDBusConnection *connection,
+		GVariant *parameters, GDBusMethodInvocation *invocation)
+{
+	GVariant *param;
+	int result = ES_R_OK;
+	char *event_name;
+	char *own_name;
+	struct __last_event_item *item;
+
+	g_variant_get(parameters, "(&s&s)", &event_name, &own_name);
+
+	if (!event_name || !own_name) {
+		result = ES_R_ERROR;
+		_E("invalid event_name and own_name");
+		goto out;
+	}
+
+	item = (struct __last_event_item *)g_hash_table_lookup(user_last_event_table,
+			event_name);
+	if (item) {
+		GDBusConnection *conn_system = NULL;
+		GVariant *gv;
+		bundle *b;
+		bundle_raw *raw;
+		int len;
+		int ret;
+		GError *error = NULL;
+
+		conn_system = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &error);
+		if (conn_system == NULL) {
+			_E("failed to get system connection");
+			if (error != NULL) {
+				_E("error(%s)", error->message);
+				g_error_free(error);
+			}
+		}
+
+		b = bundle_create();
+		bundle_add_str(b, EVT_KEY_ESD_EVENT_NAME, event_name);
+		bundle_add_str(b, EVT_KEY_ESD_OWN_NAME, own_name);
+		bundle_encode(b, &raw, &len);
+		gv  = g_variant_new("(us)", len, raw);
+		ret = g_dbus_connection_emit_signal(connection,
+				item->own_name,
+				"/tizen/system/event",
+				"tizen.system.event",
+				"esd_keep_data",
+				gv,
+				&error);
+		if (ret == FALSE) {
+			_E("Unable to connect to dbus: %s", error->message);
+			g_error_free(error);
+		}
+		bundle_free_encoded_rawdata(&raw);
+		bundle_free(b);
+	}
+
+out:
+	param = g_variant_new("(i)", result);
+
+	g_dbus_method_invocation_return_value(invocation, param);
+}
+
 static void handle_method_call(GDBusConnection *connection,
 	const gchar *sender, const gchar *object_path,
 	const gchar *interface_name, const gchar *method_name,
@@ -1493,6 +1622,10 @@ static void handle_method_call(GDBusConnection *connection,
 	} else if (g_strcmp0(method_name, "GetEarlierData") == 0) {
 		get_earlier_data_method_call(parameters, invocation);
 #endif
+	} else if (g_strcmp0(method_name, "KeepLastData") == 0) {
+		keep_last_data_method_call(parameters, invocation);
+	} else if (g_strcmp0(method_name, "CheckLastData") == 0) {
+		check_last_data_method_call(connection, parameters, invocation);
 	}
 }
 
@@ -1570,6 +1703,8 @@ static int __esd_before_loop(void)
 	earlier_item *item;
 
 	earlier_event_table = g_hash_table_new(g_str_hash, g_str_equal);
+	user_last_event_table = g_hash_table_new_full(g_str_hash,
+			g_str_equal, NULL, (GDestroyNotify)free_saved_event);
 
 	_I("register events for earlier_data");
 	size = sizeof(earlier_event_list)/sizeof(*earlier_event_list);
@@ -1993,6 +2128,8 @@ static void __esd_finalize(void)
 		}
 		g_hash_table_unref(earlier_event_table);
 	}
+
+	g_hash_table_destroy(user_last_event_table);
 #endif
 
 	if (event_launch_table) {
