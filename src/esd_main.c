@@ -24,6 +24,10 @@
 #define GLOBAL_USER tzplatform_getuid(TZ_SYS_GLOBALAPP_USER)
 #define ROOT_USER 0
 
+#define SYS_EVENT_NAME_PREFIX "tizen.system.event"
+#define SYS_EVENT_OBJ_PATH "/tizen/system/event"
+#define REQUEST_LAST_DATA "request_last_data"
+
 static GHashTable *event_launch_table; /* table of events for launch_on_event*/
 
 static const char *event_launch_support_list[] = {
@@ -67,6 +71,16 @@ typedef struct __earlier_table_item {
 
 static bool g_is_bootcompleted = false;
 #endif
+
+static GHashTable *user_last_event_table; /* table of user events for last data */
+
+struct __last_event_item {
+	char *key;
+	char *app_id;
+	char *event_name;
+	char *own_name;
+	uid_t uid;
+};
 
 static GHashTable *trusted_busname_table; /* table of dbus bus-names for trusted user-event */
 
@@ -150,6 +164,17 @@ static void __esd_finish_cynara(void)
 	if (r_cynara)
 		cynara_finish(r_cynara);
 	r_cynara = NULL;
+}
+
+static void free_saved_event(struct __last_event_item *item)
+{
+	if (!item)
+		return;
+
+	free(item->event_name);
+	free(item->own_name);
+	free(item->app_id);
+	free(item);
 }
 
 #ifdef APPFW_EVENT_SYSTEM_EARLIER_FEATURE
@@ -1136,6 +1161,16 @@ static const gchar introspection_xml[] =
 "			<arg type='s' name='earlier_data' direction='out'/>"
 "		</method>"
 #endif
+"		<method name='KeepLastData'>"
+"			<arg type='s' name='eventname' direction='in'/>"
+"			<arg type='s' name='own_name' direction='in'/>"
+"			<arg type='i' name='ret' direction='out'/>"
+"		</method>"
+"		<method name='CheckLastData'>"
+"			<arg type='s' name='eventname' direction='in'/>"
+"			<arg type='s' name='own_name' direction='in'/>"
+"			<arg type='i' name='ret' direction='out'/>"
+"		</method>"
 "	</interface>"
 "</node>";
 
@@ -1473,6 +1508,144 @@ static void get_earlier_data_method_call(GVariant *parameters, GDBusMethodInvoca
 }
 #endif
 
+static void keep_last_data_method_call(GDBusConnection *connection,
+		const gchar *sender, GVariant *parameters,
+		GDBusMethodInvocation *invocation)
+{
+	GVariant *param;
+	int result = ES_R_OK;
+	char *event_name;
+	char *own_name;
+	char *key;
+	char app_id[128];
+	int sender_pid;
+	uid_t sender_uid;
+	struct __last_event_item *item;
+
+	g_variant_get(parameters, "(&s&s)", &event_name, &own_name);
+
+	sender_pid = __get_sender_pid(connection, sender);
+	sender_uid = (uid_t)__get_sender_uid(connection, sender);
+	if (__esd_get_appid_by_pid(sender_pid, sender_uid, app_id,
+				sizeof(app_id)) < 0) {
+		_E("failed to get appid by pid");
+		goto out;
+	}
+
+	if (!event_name || !own_name) {
+		result = ES_R_ERROR;
+		_E("invalid event_name and own_name");
+		goto out;
+	}
+
+	key = (char *)malloc(sizeof(event_name) + 10);
+	snprintf(key, sizeof(event_name) + 10, "%s_%d", event_name, sender_uid);
+	item = (struct __last_event_item *)g_hash_table_lookup(user_last_event_table,
+			key);
+	if (!item) {
+		item = calloc(1, sizeof(*item));
+		if (!item) {
+			result = ES_R_ERROR;
+			goto out;
+		}
+		item->key = key;
+		item->event_name = strdup(event_name);
+		item->own_name = strdup(own_name);
+		item->uid = sender_uid;
+		item->app_id = strdup(app_id);
+		g_hash_table_insert(user_last_event_table,
+				item->key, item);
+	} else {
+		free(item->own_name);
+		item->own_name = strdup(own_name);
+	}
+
+out:
+	param = g_variant_new("(i)", result);
+
+	g_dbus_method_invocation_return_value(invocation, param);
+}
+
+static void check_last_data_method_call(GDBusConnection *connection,
+		const gchar *sender, GVariant *parameters,
+		GDBusMethodInvocation *invocation)
+{
+	GVariant *param;
+	int result = ES_R_OK;
+	char *event_name;
+	char *own_name;
+	char *key;
+	char app_id[128];
+	int sender_pid;
+	uid_t sender_uid;
+	struct __last_event_item *item;
+
+	g_variant_get(parameters, "(&s&s)", &event_name, &own_name);
+
+	if (!event_name || !own_name) {
+		result = ES_R_ERROR;
+		_E("invalid event_name and own_name");
+		goto out;
+	}
+
+	sender_pid = __get_sender_pid(connection, sender);
+	sender_uid = (uid_t)__get_sender_uid(connection, sender);
+	if (__esd_get_appid_by_pid(sender_pid, sender_uid, app_id,
+				sizeof(app_id)) < 0) {
+		result = ES_R_ERROR;
+		_E("failed to get appid by pid");
+		goto out;
+	}
+
+	key = (char *)malloc(sizeof(event_name) + 10);
+	snprintf(key, sizeof(event_name) + 10, "%s_%d", event_name, sender_uid);
+	item = (struct __last_event_item *)g_hash_table_lookup(user_last_event_table,
+			key);
+	free(key);
+	if (item) {
+		GVariant *gv;
+		bundle *b;
+		bundle_raw *raw;
+		int len;
+		int ret;
+		GError *error = NULL;
+
+		b = bundle_create();
+		if (!b) {
+			result = ES_R_ERROR;
+			goto out;
+		}
+		bundle_add_str(b, EVT_KEY_KEPT_EVENT_NAME, event_name);
+		bundle_add_str(b, EVT_KEY_KEPT_OWN_NAME, own_name);
+		if (__esd_check_certificate_match(item->uid, item->app_id,
+				sender_uid, app_id) == ES_R_OK)
+			bundle_add_str(b, EVT_KEY_KEPT_IS_TRUSTED, "true");
+		else
+			bundle_add_str(b, EVT_KEY_KEPT_IS_TRUSTED, "false");
+
+		bundle_encode(b, &raw, &len);
+		gv  = g_variant_new("(us)", len, raw);
+		ret = g_dbus_connection_emit_signal(connection,
+				item->own_name,
+				SYS_EVENT_OBJ_PATH,
+				SYS_EVENT_NAME_PREFIX,
+				REQUEST_LAST_DATA,
+				gv,
+				&error);
+		if (ret == FALSE) {
+			_E("Unable to emit signal: %s", error->message);
+			g_error_free(error);
+		}
+		bundle_free_encoded_rawdata(&raw);
+		bundle_free(b);
+	}
+
+out:
+	param = g_variant_new("(i)", result);
+
+	g_dbus_method_invocation_return_value(invocation, param);
+}
+
 static void handle_method_call(GDBusConnection *connection,
 	const gchar *sender, const gchar *object_path,
 	const gchar *interface_name, const gchar *method_name,
@@ -1493,6 +1666,10 @@ static void handle_method_call(GDBusConnection *connection,
 	} else if (g_strcmp0(method_name, "GetEarlierData") == 0) {
 		get_earlier_data_method_call(parameters, invocation);
 #endif
+	} else if (g_strcmp0(method_name, "KeepLastData") == 0) {
+		keep_last_data_method_call(connection, sender, parameters, invocation);
+	} else if (g_strcmp0(method_name, "CheckLastData") == 0) {
+		check_last_data_method_call(connection, sender, parameters, invocation);
 	}
 }
 
@@ -1570,6 +1747,8 @@ static int __esd_before_loop(void)
 	earlier_item *item;
 
 	earlier_event_table = g_hash_table_new(g_str_hash, g_str_equal);
+	user_last_event_table = g_hash_table_new_full(g_str_hash,
+			g_str_equal, NULL, (GDestroyNotify)free_saved_event);
 
 	_I("register events for earlier_data");
 	size = sizeof(earlier_event_list)/sizeof(*earlier_event_list);
@@ -1993,6 +2172,8 @@ static void __esd_finalize(void)
 		}
 		g_hash_table_unref(earlier_event_table);
 	}
+
+	g_hash_table_destroy(user_last_event_table);
 #endif
 
 	if (event_launch_table) {
